@@ -138,6 +138,35 @@ def test_crashing_collector_does_not_break_refresh():
     assert [(e.service, e.operation) for e in snap.errors] == [("Boom", "collect")]
 
 
+def test_stop_cancels_run_quietly(caplog):
+    import threading
+
+    import pytest
+
+    from ocimon.engine import RefreshCancelled
+
+    stop = threading.Event()
+
+    def list_instances(compartment_id):
+        stop.set()  # shutdown starts while collectors are running
+        return [instance("i-a", A)]
+
+    compute = FakeClient(list_instances=list_instances, list_vnic_attachments=[])
+    clients = {
+        oci.identity.IdentityClient: identity_client(),
+        oci.resource_search.ResourceSearchClient: FakeClient(
+            search_resources=Resp(ns(items=[search_item("Instance", "i-a", A)]))),
+        oci.core.ComputeClient: compute,
+        oci.core.VirtualNetworkClient: FakeClient(get_vnic=lambda v: None),
+    }
+    run = Collection(FakeAuth(), ["me-jeddah-1"], workers=4, collectors=[ComputeCollector()],
+                     client_factory=lambda cls, region: clients[cls], shutdown_event=stop)
+    with pytest.raises(RefreshCancelled):
+        run.run()
+    assert run._errors == {}
+    assert "failed" not in caplog.text
+
+
 def test_sub_compartment_root_walks_tree():
     tree = {A: [ns(id=B, name="app", compartment_id=A, lifecycle_state="ACTIVE", description="")], B: []}
     calls = []

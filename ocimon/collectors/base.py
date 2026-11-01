@@ -119,6 +119,8 @@ class RegionContext:
     def run(self, tasks: Iterable[Task]) -> dict[Hashable, Any]:
         """Run tasks in parallel; return {key: result} for the ones that succeeded."""
         tasks = list(tasks)
+        if self._run.stopping():
+            return {}
         pool: Executor = self._run.io_pool
         futures = [(t, pool.submit(t.fn)) for t in tasks]
         results: dict[Hashable, Any] = {}

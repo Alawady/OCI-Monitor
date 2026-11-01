@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -35,6 +36,20 @@ def open_browser(url: str) -> None:
         pass
 
 
+def port_in_use(host: str, port: int) -> bool:
+    """True if something is already listening on host:port."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        if os.name != "nt":
+            # Match uvicorn: ignore TIME_WAIT leftovers (on Windows this flag would allow stealing the port).
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return True
+    return False
+
+
 def build_source(settings: Settings):
     """Return (snapshot source callable, mode, non-secret auth description)."""
     if settings.demo:
@@ -62,6 +77,11 @@ def main(argv: list[str] | None = None) -> None:
         if not settings.token:
             sys.exit("ocimon: a non-local --host requires an access token (--token or OCIMON_TOKEN).")
 
+    # Uvicorn only binds after app startup, so check first rather than fail after starting work.
+    if port_in_use(settings.host, settings.port):
+        sys.exit(f"ocimon: port {settings.port} on {settings.host} is already in use "
+                 f"(is another OCI Monitor running?). Stop it or pick another port with --port.")
+
     source, mode, auth_info = build_source(settings)
 
     import uvicorn
@@ -82,15 +102,18 @@ def main(argv: list[str] | None = None) -> None:
         browse = url + (f"?token={settings.token}" if settings.token else "")
         threading.Timer(1.0, open_browser, args=(browse,)).start()
 
-    uvicorn.run(
-        app,
-        host=settings.host,
-        port=settings.port,
-        log_level=settings.log_level,
-        access_log=settings.log_level == "debug",
-        proxy_headers=True,
-        forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"),
-    )
+    try:
+        uvicorn.run(
+            app,
+            host=settings.host,
+            port=settings.port,
+            log_level=settings.log_level,
+            access_log=settings.log_level == "debug",
+            proxy_headers=True,
+            forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"),
+        )
+    finally:
+        refresher.stop()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ class Refresher:
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
+        if hasattr(source, "shutdown_event"):
+            source.shutdown_event = self._stop  # lets stop() cancel an in-flight refresh
         self._thread: threading.Thread | None = None
         self.refreshing = False
         self.refresh_count = 0
@@ -40,6 +42,9 @@ class Refresher:
         try:
             snap = self.source()
         except Exception as exc:
+            if self._stop.is_set():
+                # Shutting down mid-refresh (Ctrl+C, server exit): thread pools refuse new work. Not an error.
+                return self.snapshot
             # Keep serving the previous snapshot; surface the failure in /api/health.
             log.exception("refresh failed")
             self.last_failure = f"{type(exc).__name__}: {exc}"[:500]

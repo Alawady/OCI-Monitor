@@ -38,13 +38,19 @@ CLIENT_TIMEOUT = (10, 60)  # connect, read seconds
 ClientFactory = Callable[[type, str], Any]
 
 
+class RefreshCancelled(Exception):
+    """The app is shutting down; the partial result is discarded."""
+
+
 class Collection:
     """State for a single refresh. Create a new one per run."""
 
     def __init__(self, auth: Auth, regions: list[str], root_id: str | None = None, *,
                  workers: int = 16, collectors: list[Collector] | None = None,
-                 client_factory: ClientFactory | None = None) -> None:
+                 client_factory: ClientFactory | None = None,
+                 shutdown_event: threading.Event | None = None) -> None:
         self.auth = auth
+        self._shutdown_event = shutdown_event
         self.tenancy_id = auth.tenancy_id
         self.root_id = root_id or auth.tenancy_id
         self.regions = regions
@@ -64,6 +70,9 @@ class Collection:
         self.io_pool: ThreadPoolExecutor | None = None
 
     # -- shared services used by RegionContext ------------------------------
+    def stopping(self) -> bool:
+        return self._shutdown_event is not None and self._shutdown_event.is_set()
+
     def client(self, client_cls: type, region: str) -> Any:
         # SDK clients hold a requests.Session; keep one per thread to be safe.
         cache = getattr(self._local, "clients", None)
@@ -194,9 +203,10 @@ class Collection:
         try:
             resources = collector.collect(RegionContext(self, region, collector))
         except Exception as exc:
-            log.exception("collector %s failed in %s", collector.key, region)
-            self._record(exc, region, collector.label, "collect")
             resources = []
+            if not self.stopping():  # pools refuse work during shutdown; that's not a collector bug
+                log.exception("collector %s failed in %s", collector.key, region)
+                self._record(exc, region, collector.label, "collect")
         return resources, time.monotonic() - start
 
     def _search_fallbacks(self, seen: set[str]) -> list[Resource]:
@@ -245,6 +255,8 @@ class Collection:
                 for r in found:
                     resources.setdefault(r.id, r)
 
+        if self.stopping():
+            raise RefreshCancelled()
         fallbacks = self._search_fallbacks(set(resources))
         all_resources = list(resources.values()) + fallbacks
         stats = {
@@ -276,6 +288,7 @@ class LiveSource:
         self.root_id = root_id
         self.workers = workers
         self.client_factory = client_factory
+        self.shutdown_event: threading.Event | None = None  # set by the Refresher so shutdown can cancel a run
         self._regions: list[str] | None = None
 
     def regions(self) -> list[str]:
@@ -296,6 +309,7 @@ class LiveSource:
         return self._regions
 
     def __call__(self) -> Snapshot:
+        err = None
         try:
             regions = self.regions()
         except Exception as exc:
@@ -303,9 +317,8 @@ class LiveSource:
             regions = [self.auth.region]
             err = error_from_exception(exc, region=None, service="Identity",
                                        operation="ListRegionSubscriptions", compartment_id=None)
-            snap = Collection(self.auth, regions, self.root_id, workers=self.workers,
-                              client_factory=self.client_factory)
-            snap.record_error(err)
-            return snap.run()
-        return Collection(self.auth, regions, self.root_id, workers=self.workers,
-                          client_factory=self.client_factory).run()
+        collection = Collection(self.auth, regions, self.root_id, workers=self.workers,
+                                client_factory=self.client_factory, shutdown_event=self.shutdown_event)
+        if err:
+            collection.record_error(err)
+        return collection.run()
