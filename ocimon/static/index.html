@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>OCI Monitor</title>
+  <link rel="icon" href="static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="static/styles.css">
+  <script src="static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <button id="nav-toggle" class="icon-btn only-mobile" type="button" aria-label="Show compartments" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    </button>
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="9" width="26" height="14" rx="7"/></svg>
+      <span class="brand-name">OCI Monitor</span>
+      <span id="tenancy" class="tenancy"></span>
+      <span id="mode-badge" class="badge badge-demo" hidden>DEMO</span>
+    </div>
+    <label class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="search" placeholder="Search name, OCID, IP, shape…" autocomplete="off" spellcheck="false" aria-label="Search resources">
+      <kbd>/</kbd>
+    </label>
+    <div class="topbar-right">
+      <select id="region" class="select" aria-label="Region"></select>
+      <div class="refresh-info" aria-live="polite">
+        <span id="updated" class="muted">Loading…</span>
+        <span id="auto-refresh" class="muted small"></span>
+      </div>
+      <button id="errors-btn" class="btn btn-warn" type="button" hidden></button>
+      <button id="refresh-btn" class="btn" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+        <span>Refresh now</span>
+      </button>
+      <button id="theme-btn" class="icon-btn" type="button" aria-label="Toggle theme" title="Theme: auto">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside id="sidebar" class="sidebar" aria-label="Compartments">
+      <div class="sidebar-head">
+        <span>Compartments</span>
+        <button id="tree-collapse" class="link-btn small" type="button">Collapse all</button>
+      </div>
+      <nav id="tree" class="tree" role="tree"></nav>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+
+    <main id="main" class="main">
+      <div id="banner" class="banner" role="alert" hidden></div>
+
+      <section id="cards" class="cards" aria-label="Summary"></section>
+
+      <section class="toolbar" aria-label="Filters">
+        <div class="scope">
+          <span class="muted small">Showing</span>
+          <span id="scope" class="scope-name"></span>
+        </div>
+        <div class="filters">
+          <select id="type-filter" class="select" aria-label="Resource type"></select>
+          <select id="state-filter" class="select" aria-label="State"></select>
+          <label class="toggle"><input id="problems-toggle" type="checkbox"><span>Only show problems</span></label>
+          <label class="toggle"><input id="terminated-toggle" type="checkbox"><span>Show terminated</span></label>
+          <button id="clear-filters" class="link-btn" type="button" hidden>Clear filters</button>
+        </div>
+      </section>
+
+      <section id="errors" class="errors-panel" hidden aria-label="Read errors"></section>
+
+      <div id="content" class="content"></div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

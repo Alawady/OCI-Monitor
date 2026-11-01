@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocimon"
+version = "0.1.0"
+description = "Read-only Oracle Cloud Infrastructure monitoring dashboard"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "oci>=2.120",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "httpx>=0.27"]
+
+[project.scripts]
+ocimon = "ocimon.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["ocimon*"]
+
+[tool.setuptools.package-data]
+ocimon = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
