@@ -23,6 +23,8 @@ class Settings:
     regions: str | None = None
     compartment: str | None = None
     refresh: int = 120
+    cost: bool = True
+    cost_refresh: int = 3600
     demo: bool = False
     token: str | None = None
     open_browser: bool = True
@@ -62,6 +64,9 @@ def parse_args(argv: list[str] | None = None) -> Settings:
                    help="root compartment OCID to monitor (default: the tenancy)")
     p.add_argument("--refresh", type=int, default=int(env.get("OCIMON_REFRESH", "120")),
                    help="background refresh interval in seconds (default 120, minimum 10)")
+    p.add_argument("--cost-refresh", type=int, default=int(env.get("OCIMON_COST_REFRESH", "3600")),
+                   help="cost data refresh interval in seconds (default 3600, minimum 300)")
+    p.add_argument("--no-cost", action="store_true", help="don't fetch cost data (hides the Cost tab)")
     p.add_argument("--demo", action="store_true", help="serve realistic fake data; no OCI access needed")
     p.add_argument("--token", default=None, help="access token required on every request (or OCIMON_TOKEN)")
     p.add_argument("--no-browser", action="store_true", help="don't open a browser on start")
@@ -81,6 +86,8 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         regions=a.regions,
         compartment=a.compartment,
         refresh=max(10, a.refresh),
+        cost=not a.no_cost,
+        cost_refresh=max(300, a.cost_refresh),
         demo=a.demo,
         # Prefer the environment so the token doesn't show up in `ps` output.
         token=a.token or env.get("OCIMON_TOKEN") or None,

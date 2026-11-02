@@ -51,20 +51,27 @@ def port_in_use(host: str, port: int) -> bool:
 
 
 def build_source(settings: Settings):
-    """Return (snapshot source callable, mode, non-secret auth description)."""
+    """Return (snapshot source, cost source or None, mode, non-secret auth description).
+
+    The demo cost source needs the inventory, so it's returned as a factory taking the refresher.
+    """
     if settings.demo:
+        from .cost import DemoCostSource
         from .demo import DemoSource
-        return DemoSource(), "demo", {"kind": "demo", "profile": None}
+        cost = (lambda inventory: DemoCostSource(lambda: inventory.snapshot)) if settings.cost else None
+        return DemoSource(), cost, "demo", {"kind": "demo", "profile": None}
 
     from .auth import AuthError, load_auth
+    from .cost import LiveCostSource
     from .engine import LiveSource
     try:
         auth = load_auth(settings.config_file, settings.profile, settings.auth)
     except AuthError as exc:
         sys.exit(f"ocimon: {exc}")
     log.info("auth=%s profile=%s region=%s", auth.kind, auth.profile, auth.region)
+    cost = (lambda inventory: LiveCostSource(auth)) if settings.cost else None
     return (LiveSource(auth, settings.regions, settings.compartment, settings.workers),
-            "live", auth.describe)
+            cost, "live", auth.describe)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -82,7 +89,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(f"ocimon: port {settings.port} on {settings.host} is already in use "
                  f"(is another OCI Monitor running?). Stop it or pick another port with --port.")
 
-    source, mode, auth_info = build_source(settings)
+    source, cost_factory, mode, auth_info = build_source(settings)
 
     import uvicorn
 
@@ -90,8 +97,13 @@ def main(argv: list[str] | None = None) -> None:
     from .refresher import Refresher
 
     refresher = Refresher(source, settings.refresh, mode=mode)
-    app = create_app(settings, refresher, auth_info)
+    # Cost runs on its own slower schedule and thread, so it never delays the inventory or the page.
+    cost_refresher = (Refresher(cost_factory(refresher), settings.cost_refresh, mode=mode, name="cost")
+                      if cost_factory else None)
+    app = create_app(settings, refresher, auth_info, cost_refresher)
     refresher.start()
+    if cost_refresher:
+        cost_refresher.start()
 
     shown_host = "127.0.0.1" if settings.host in ("0.0.0.0", "::") else settings.host
     if ":" in shown_host:
@@ -114,6 +126,8 @@ def main(argv: list[str] | None = None) -> None:
         )
     finally:
         refresher.stop()
+        if cost_refresher:
+            cost_refresher.stop()
 
 
 if __name__ == "__main__":

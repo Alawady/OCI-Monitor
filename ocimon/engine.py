@@ -232,6 +232,7 @@ class Collection:
 
     def run(self) -> Snapshot:
         started = time.time()
+        t0 = time.monotonic()
         self.auth.reload()
         if self.auth.token_expired():
             expired = datetime.fromtimestamp(self.auth.token_expires_at, timezone.utc).isoformat()
@@ -275,6 +276,7 @@ class Collection:
             tenancy_name=self.tenancy_name,
             mode="live",
             stats=stats,
+            elapsed=time.monotonic() - t0,
         )
 
 

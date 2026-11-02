@@ -116,7 +116,10 @@
     items: [],
     loadedAt: null,         // last_refresh of the data on screen
     loading: true,
-    filters: { compartment: "", region: "", type: "", category: "", state: "", q: "", problems: false, include_terminated: false },
+    filters: { compartment: "", region: "", type: "", category: "", state: "", q: "", problems: false, include_terminated: false, view: "", days: 7 },
+    cost: null,             // /api/cost response for the current compartment/region/range
+    costCurrency: null,     // set when resource rows carry cost
+    costTable: false,       // chart shown as a table
     expanded: new Set(),
     sort: store.get("sort", {}),
     openTree: new Set(store.get("openTree", [])),
@@ -132,12 +135,16 @@
     for (const k of ["compartment", "region", "type", "category", "state", "q"]) f[k] = p.get(k) || "";
     f.problems = p.get("problems") === "1";
     f.include_terminated = p.get("terminated") === "1";
+    f.view = p.get("view") === "cost" ? "cost" : "";
+    f.days = [7, 14, 30].includes(Number(p.get("days"))) ? Number(p.get("days")) : 7;
   }
   function writeHash() {
     const f = S.filters; const p = new URLSearchParams();
     for (const k of ["compartment", "region", "type", "category", "state", "q"]) if (f[k]) p.set(k, f[k]);
     if (f.problems) p.set("problems", "1");
     if (f.include_terminated) p.set("terminated", "1");
+    if (f.view) p.set("view", f.view);
+    if (f.view === "cost" && f.days !== 7) p.set("days", f.days);
     const hash = p.toString();
     history.replaceState(null, "", hash ? `#${hash}` : location.pathname + location.search);
   }
@@ -164,6 +171,7 @@
       ]);
       if (seq !== loadSeq) return; // a newer request superseded this one
       S.summary = summary; S.tree = tree.tree; S.items = res.items; S.loadedAt = res.last_refresh;
+      S.costCurrency = res.currency || null;
       S.loading = false;
       setConnection(true);
       render();
@@ -178,6 +186,9 @@
       const health = await api("health");
       setConnection(true);
       const changed = health.last_refresh !== (S.health && S.health.last_refresh);
+      const prevCost = S.health && S.health.cost;
+      const costChanged = !!health.cost && (!prevCost || health.cost.last_refresh !== prevCost.last_refresh
+        || health.cost.status !== prevCost.status);
       S.health = health;
       renderStatus();
       renderErrors();
@@ -186,6 +197,11 @@
         await loadData();
       } else if (!health.last_refresh) {
         renderContent();
+      }
+      // New cost data: refresh the Cost tab and the cost column on resource rows.
+      if (costChanged) {
+        if (!changed && health.last_refresh && health.cost.last_refresh) await loadData();
+        await loadCost();
       }
     } catch (err) {
       handleError(err);
@@ -196,6 +212,7 @@
     S.meta = await api("meta");
     $("#mode-badge").hidden = S.meta.mode !== "demo";
     $("#tenancy").textContent = S.meta.tenancy_name || "";
+    $("#tabs").hidden = !S.meta.cost_enabled;
     renderRegions();
   }
 
@@ -230,6 +247,7 @@
     renderTree();
     renderScope();
     renderContent();
+    renderView();
   }
 
   function renderRegions() {
@@ -245,6 +263,7 @@
 
   function renderStatus() {
     const hl = S.health; if (!hl) return;
+    if (S.filters.view === "cost" && hl.cost && hl.cost.status !== "disabled") { renderCostStatus(hl); return; }
     const upd = $("#updated");
     if (hl.last_refresh) {
       upd.textContent = `Updated ${fmtAgo(hl.last_refresh)} · took ${hl.duration_s}s`;
@@ -258,15 +277,36 @@
       auto.textContent = `Auto-refresh every ${fmtInterval(hl.refresh_interval)} · next in ${fmtDuration(hl.next_refresh_at - Date.now() / 1000)}`;
     } else auto.textContent = `Auto-refresh every ${fmtInterval(hl.refresh_interval)}`;
 
-    const btn = $("#refresh-btn");
-    btn.disabled = !!hl.refreshing;
-    btn.classList.toggle("spinning", !!hl.refreshing);
+    setRefreshButton(!!hl.refreshing);
+    renderErrorsButton();
+    updateBanner();
+  }
 
+  function setRefreshButton(busy) {
+    const btn = $("#refresh-btn");
+    btn.disabled = busy;
+    btn.classList.toggle("spinning", busy);
+  }
+
+  function renderErrorsButton() {
+    const hl = S.health;
     const eb = $("#errors-btn");
     const n = hl.errors.length;
     eb.hidden = n === 0;
     eb.textContent = `⚠ ${n} read issue${n === 1 ? "" : "s"}`;
+  }
 
+  function renderCostStatus(hl) {
+    const c = hl.cost;
+    const upd = $("#updated");
+    upd.textContent = c.last_refresh ? `Cost updated ${fmtAgo(c.last_refresh)}` : (c.status === "error" ? "Cost unavailable" : "Fetching cost…");
+    upd.title = c.last_refresh ? new Date(c.last_refresh * 1000).toLocaleString() : "";
+    const auto = $("#auto-refresh");
+    if (c.refreshing) auto.textContent = "Fetching cost data…";
+    else if (c.next_refresh_at) auto.textContent = `Cost refresh every ${fmtInterval(c.refresh_interval)} · next in ${fmtDuration(c.next_refresh_at - Date.now() / 1000)}`;
+    else auto.textContent = `Cost refresh every ${fmtInterval(c.refresh_interval)}`;
+    setRefreshButton(!!c.refreshing);
+    renderErrorsButton();
     updateBanner();
   }
 
@@ -506,6 +546,12 @@
       ...(COLUMNS[type] || []),
       { key: "compartment", label: "Compartment", get: (r) => r.compartment_path || r.compartment_name || "" },
     ];
+    if (S.costCurrency) {
+      cols.push({
+        key: "cost", label: "Cost/day", num: true, title: "Average daily cost over the last 7 full days (UTC)",
+        get: (r) => (r.cost ? r.cost.avg_day : null), fmt: (v) => (v === null || v === undefined ? "—" : money(v)),
+      });
+    }
     if (multiRegion) cols.push({ key: "region", label: "Region", get: (r) => r.region });
     return cols;
   }
@@ -541,7 +587,7 @@
     const limited = S.showAll.has(type) ? sorted : sorted.slice(0, ROW_LIMIT);
     const s = S.sort[type];
     const thead = h("thead", {}, h("tr", {}, cols.map((c) => h("th", {
-      class: `sortable ${c.num ? "num" : ""}`, scope: "col", tabindex: "0",
+      class: `sortable ${c.num ? "num" : ""}`, scope: "col", tabindex: "0", title: c.title || null,
       "aria-sort": s && s.key === c.key ? (s.dir === "asc" ? "ascending" : "descending") : "none",
       onclick: () => setSort(type, c.key),
       onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSort(type, c.key); } },
@@ -596,6 +642,11 @@
           h("button", { class: "link-btn small mono", type: "button", title: "Copy OCID", onclick: () => copy(x.id) }, x.id.slice(0, 28) + "…"))))));
 
     const right = h("div", {});
+    if (r.cost) {
+      right.append(h("h4", {}, "Cost · last 7 days"), h("div", { class: "cost-detail" },
+        sparkline(r.cost.daily, 160, 36, "Daily cost, last 7 full days"),
+        h("div", {}, h("b", {}, money(r.cost.total_7d)), h("span", { class: "muted" }, ` total · ${money(r.cost.avg_day)}/day`))));
+    }
     const sets = r.details.backend_sets;
     if (sets && sets.length) {
       right.append(h("h4", {}, "Backend sets"), h("div", { class: "bs-list" }, sets.map((s) =>
@@ -688,13 +739,324 @@
     renderContent();
   }
 
+  // ------------------------------------------------------------------ cost
+  function money(v, compact) {
+    const cur = (S.cost && S.cost.currency) || S.costCurrency || "";
+    const opts = compact ? { notation: "compact", maximumFractionDigits: 1 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+    if (/^[A-Z]{3}$/.test(cur)) {
+      try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur, ...opts }).format(v); } catch { /* unknown code */ }
+    }
+    return `${new Intl.NumberFormat(undefined, opts).format(v)}${cur ? " " + cur : ""}`;
+  }
+  const utcDay = (iso, opts) => new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", ...opts });
+
+  function svg(tag, attrs, ...kids) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) if (v !== null && v !== undefined) el.setAttribute(k, v);
+    for (const c of kids.flat()) if (c !== null && c !== undefined) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return el;
+  }
+
+  function sparkline(values, w, hgt, label) {
+    const max = Math.max(...values); const min = Math.min(0, ...values);
+    const step = values.length > 1 ? (w - 6) / (values.length - 1) : 0;
+    const y = (v) => 3 + (hgt - 6) * (1 - (v - min) / (max - min || 1));
+    const last = values.length - 1;
+    const el = svg("svg", { class: "viz spark", viewBox: `0 0 ${w} ${hgt}`, role: "img",
+      "aria-label": `${label}: ${values.map((v) => money(v)).join(", ")}` },
+    svg("polyline", { class: "spark-line", points: values.map((v, i) => `${3 + i * step},${y(v)}`).join(" ") }),
+    svg("circle", { class: "spark-dot", cx: 3 + last * step, cy: y(values[last]), r: 3 }));
+    el.style.width = `${w}px`; el.style.height = `${hgt}px`;
+    return el;
+  }
+
+  function delta(pct, period) {
+    if (pct === null || pct === undefined) return h("span", { class: "muted" }, `no data for the previous ${period}`);
+    if (Math.abs(pct) < 0.05) return h("span", { class: "muted" }, `unchanged vs previous ${period}`);
+    // For cost, up is bad: color carries direction × meaning, the arrow and sign carry it without color.
+    const up = pct > 0;
+    return h("span", { class: up ? "delta-bad" : "delta-good" }, `${up ? "▲ +" : "▼ "}${pct.toFixed(1)}%`,
+      h("span", { class: "muted" }, ` vs previous ${period}`));
+  }
+
+  let costSeq = 0;
+  async function loadCost() {
+    if (!S.meta || !S.meta.cost_enabled || S.filters.view !== "cost") return;
+    const seq = ++costSeq;
+    try {
+      const data = await api("cost", { days: S.filters.days, compartment: S.filters.compartment, region: S.filters.region });
+      if (seq !== costSeq) return;
+      S.cost = data;
+      renderCost();
+    } catch (err) {
+      if (seq === costSeq) handleError(err);
+    }
+  }
+
+  function renderView() {
+    const cost = S.filters.view === "cost" && !!S.meta && S.meta.cost_enabled;
+    $("#resources-view").hidden = cost;
+    $("#cost-view").hidden = !cost;
+    for (const t of document.querySelectorAll(".tab")) {
+      const on = (t.dataset.view === "cost") === cost;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", String(on));
+    }
+    const search = $("#search");
+    search.disabled = cost;
+    search.placeholder = cost ? "Search applies to the Resources tab" : "Search name, OCID, IP, shape…";
+    renderStatus();
+    if (cost) renderCost();
+  }
+
+  function scopeLabel() {
+    const node = S.filters.compartment && findNode(S.tree, S.filters.compartment);
+    if (node && node.id !== S.tree.id) return node.path;
+    return S.tree ? `${S.tree.name} (all compartments)` : "";
+  }
+
+  function renderCost() {
+    const el = $("#cost-view");
+    if (el.hidden) return;
+    const c = S.cost;
+    const meta = (S.health && S.health.cost) || {};
+    const head = h("div", { class: "cost-head" },
+      h("div", { class: "scope" }, h("span", { class: "muted small" }, "Cost for"),
+        h("span", { class: "scope-name", title: scopeLabel() }, scopeLabel()),
+        S.filters.region ? h("span", { class: "tag" }, S.filters.region) : null),
+      h("div", { class: "range", role: "group", "aria-label": "Date range" }, [7, 14, 30].map((d) => h("button", {
+        class: `range-btn ${S.filters.days === d ? "active" : ""}`, type: "button", "aria-pressed": String(S.filters.days === d),
+        onclick: () => setFilter({ days: d }),
+      }, `Last ${d} days`))));
+
+    if (!c || !c.totals) {
+      const failed = (c && c.status === "error") || meta.status === "error";
+      el.replaceChildren(head, h("div", { class: "state-box" },
+        failed ? null : h("div", { class: "spinner" }),
+        h("h3", {}, failed ? "Cost data is not available" : "Fetching cost data from the OCI Usage API…"),
+        h("p", { class: failed ? "wrap" : "" }, failed ? (meta.error || "Unknown error")
+          : "This runs in the background and refreshes hourly; the Resources tab is unaffected.")));
+      return;
+    }
+
+    const t = c.totals;
+    const period = `${c.days} days`;
+    const tile = (label, value, sub) => h("div", { class: "tile" },
+      h("div", { class: "tile-label" }, label), h("div", { class: "tile-value" }, value), sub ? h("div", { class: "tile-sub" }, sub) : null);
+    const tiles = h("div", { class: "tiles" },
+      tile(`Last ${period}`, money(t.period), delta(t.delta_pct, period)),
+      tile("Daily average", money(t.daily_avg), h("span", { class: "muted" }, `over ${c.days} full days`)),
+      tile("Yesterday", money(t.yesterday), h("span", { class: "muted" }, utcDay(c.chart[c.chart.length - 2].date, { weekday: "long", month: "short", day: "numeric" }))),
+      tile("Today so far", money(t.today_partial), h("span", { class: "muted" }, "partial · usage data lags a few hours")),
+      t.covered_pct !== null && t.covered_pct !== undefined
+        ? tile("Matched to resources", `${t.covered_pct}%`, h("span", { class: "muted" }, "of spend; the rest is backups, VNICs, logs…"))
+        : null);
+
+    const chartPanel = h("section", { class: "panel" },
+      h("div", { class: "panel-head" },
+        h("div", {}, h("h3", {}, "Daily cost by service"), h("div", { class: "muted small" }, "UTC days · today is partial")),
+        h("button", { class: "link-btn small", type: "button", onclick: () => { S.costTable = !S.costTable; renderCost(); } },
+          S.costTable ? "View as chart" : "View as table")),
+      costLegend(c.series),
+      S.costTable ? costDailyTable(c) : costChart(c));
+
+    el.replaceChildren(head, tiles, chartPanel,
+      h("div", { class: "grid-2" }, costServiceTable(c), costCompartmentTable(c)),
+      costTopResources(c));
+  }
+
+  const slotClass = (slot) => (slot ? `slot-${slot}` : "slot-other");
+  function costSlot(c, name) { const s = c.series.find((x) => x.name === name); return s ? s.slot : null; }
+
+  function costLegend(series) {
+    return h("div", { class: "legend" }, series.map((s) => h("span", { class: "legend-item" },
+      h("span", { class: `swatch ${slotClass(s.slot)}` }), s.name)));
+  }
+
+  function niceScale(max, count) {
+    if (!(max > 0)) return { step: 1, top: 1 };
+    const raw = max / count; const mag = 10 ** Math.floor(Math.log10(raw)); const n = raw / mag;
+    const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+    return { step, top: Math.ceil(max / step) * step };
+  }
+
+  let chartObserver = null;
+  function costChart(c) {
+    const wrap = h("div", { class: "chart" });
+    const tip = h("div", { class: "chart-tip", role: "status" });
+    tip.hidden = true;
+    wrap.append(tip);
+    let lastW = 0;
+    const draw = () => {
+      const W = Math.floor(wrap.clientWidth);
+      if (!W || W === lastW) return;
+      lastW = W;
+      const old = wrap.querySelector("svg.chart-svg");
+      if (old) old.remove();
+      wrap.prepend(buildChart(c, W, tip));
+    };
+    if (chartObserver) chartObserver.disconnect();
+    // Draw on the next frame: drawing inside the callback resizes the page and re-triggers the observer.
+    chartObserver = new ResizeObserver(() => requestAnimationFrame(draw));
+    chartObserver.observe(wrap);
+    return wrap;
+  }
+
+  function buildChart(c, W, tip) {
+    const H = 280; const m = { l: 64, r: 12, t: 22, b: 30 };
+    const pw = W - m.l - m.r; const ph = H - m.t - m.b;
+    const days = c.chart; const n = days.length;
+    const { step, top } = niceScale(Math.max(0, ...days.map((d) => d.total)), 4);
+    const y = (v) => m.t + ph - (v / top) * ph;
+    const band = pw / n; const bw = Math.min(24, Math.max(4, band * 0.62));
+    const order = c.series.map((s) => s.name);
+    const root = svg("svg", { class: "viz chart-svg", viewBox: `0 0 ${W} ${H}`, role: "img",
+      "aria-label": `Stacked daily cost by service for ${n} days. Use “View as table” for the values.` });
+    root.style.width = `${W}px`; root.style.height = `${H}px`;
+
+    for (let v = 0; v <= top + step / 1e6; v += step) {
+      root.append(svg("line", { class: v === 0 ? "axis" : "grid", x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }));
+      root.append(svg("text", { class: "tick", x: m.l - 8, y: y(v) + 4, "text-anchor": "end" }, money(v, true)));
+    }
+    const every = n <= 15 ? 1 : 3;
+    const lastFull = n - 2;
+    const showTip = (i, g, x) => {
+      const d = days[i];
+      root.classList.add("hovering");
+      g.classList.add("hover");
+      tip.replaceChildren(
+        h("div", { class: "tip-date" }, utcDay(d.date, { weekday: "short", month: "short", day: "numeric" }), d.partial ? " (partial)" : ""),
+        h("div", { class: "tip-total" }, h("b", {}, money(d.total)), h("span", { class: "muted" }, " total")),
+        ...order.slice().reverse().filter((k) => d.values[k]).map((k) => h("div", { class: "tip-row" },
+          h("span", { class: `key ${slotClass(costSlot(c, k))}` }), h("b", {}, money(d.values[k])), h("span", { class: "muted" }, ` ${k}`))));
+      tip.hidden = false;
+      // Right of the column, or left of it when it would overflow the chart.
+      const right = x + band + 8;
+      tip.style.left = `${right + tip.offsetWidth > W ? Math.max(0, x - tip.offsetWidth - 8) : right}px`;
+      tip.style.top = `${m.t}px`;
+    };
+    const hideTip = (g) => { root.classList.remove("hovering"); g.classList.remove("hover"); tip.hidden = true; };
+
+    days.forEach((d, i) => {
+      const x0 = m.l + i * band; const x = x0 + (band - bw) / 2;
+      const g = svg("g", { class: `col ${d.partial ? "partial" : ""}` });
+      const present = order.filter((k) => (d.values[k] || 0) > 0);
+      let base = m.t + ph;
+      present.forEach((k, j) => {
+        const hgt = (d.values[k] / top) * ph;
+        const yTop = base - hgt;
+        const cls = `seg ${slotClass(costSlot(c, k))}`;
+        if (j === present.length - 1) {
+          const r = Math.min(4, bw / 2, hgt);
+          g.append(svg("path", { class: cls, d: `M${x},${base}V${yTop + r}Q${x},${yTop} ${x + r},${yTop}H${x + bw - r}Q${x + bw},${yTop} ${x + bw},${yTop + r}V${base}Z` }));
+        } else if (hgt > 2.5) {
+          // 2px surface gap above each segment separates it from the next one.
+          g.append(svg("rect", { class: cls, x, y: yTop + 2, width: bw, height: hgt - 2 }));
+        }
+        base = yTop;
+      });
+      if (i === lastFull && d.total > 0) {
+        g.append(svg("text", { class: "bar-label", x: x + bw / 2, y: y(d.total) - 6, "text-anchor": "middle" }, money(d.total, true)));
+      }
+      if (i % every === (n - 1) % every || i === n - 1) {
+        g.append(svg("text", { class: "tick", x: x + bw / 2, y: H - 10, "text-anchor": "middle" },
+          d.partial ? "Today" : utcDay(d.date, { month: "short", day: "numeric" })));
+      }
+      const hit = svg("rect", { class: "hit", x: x0, y: m.t, width: band, height: ph, tabindex: "0",
+        "aria-label": `${utcDay(d.date, { month: "long", day: "numeric" })}: ${money(d.total)}${d.partial ? " (partial day)" : ""}` });
+      hit.addEventListener("pointerenter", () => showTip(i, g, x0));
+      hit.addEventListener("focus", () => showTip(i, g, x0));
+      hit.addEventListener("pointerleave", () => hideTip(g));
+      hit.addEventListener("blur", () => hideTip(g));
+      g.append(hit);
+      root.append(g);
+    });
+    return root;
+  }
+
+  function costDailyTable(c) {
+    const names = c.series.map((s) => s.name);
+    return h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Date (UTC)"), h("th", { class: "num" }, "Total"), names.map((n) => h("th", { class: "num" }, n)))),
+      h("tbody", {}, c.chart.slice().reverse().map((d) => h("tr", {},
+        h("td", {}, utcDay(d.date, { weekday: "short", month: "short", day: "numeric" }), d.partial ? h("span", { class: "muted" }, " (partial)") : null),
+        h("td", { class: "num" }, h("b", {}, money(d.total))),
+        names.map((n) => h("td", { class: "num" }, d.values[n] ? money(d.values[n]) : "—")))))));
+  }
+
+  function shareCell(pct) {
+    const bar = h("span", { class: "meter" }, h("span", { class: "meter-fill" }));
+    bar.firstChild.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    return h("td", { class: "share" }, bar, h("span", { class: "num-inline" }, `${pct.toFixed(1)}%`));
+  }
+
+  function panel(title, sub, body) {
+    return h("section", { class: "panel" },
+      h("div", { class: "panel-head" }, h("div", {}, h("h3", {}, title), sub ? h("div", { class: "muted small" }, sub) : null)),
+      body);
+  }
+
+  function costServiceTable(c) {
+    if (!c.by_service.length) return panel("By service", null, h("p", { class: "muted" }, "No cost in this period."));
+    return panel("By service", `Last ${c.days} days`, h("div", { class: "table-wrap flat" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Service"), h("th", { class: "num" }, "Cost"), h("th", {}, "Share"), h("th", {}, "vs previous"))),
+      h("tbody", {}, c.by_service.map((s) => h("tr", {},
+        h("td", {}, h("span", { class: `swatch ${slotClass(s.slot)}` }), s.service),
+        h("td", { class: "num" }, money(s.amount)),
+        shareCell(s.share),
+        h("td", { class: "small" }, deltaShort(s.delta_pct))))))));
+  }
+  function deltaShort(pct) {
+    if (pct === null || pct === undefined) return h("span", { class: "muted" }, "new");
+    if (Math.abs(pct) < 0.05) return h("span", { class: "muted" }, "0%");
+    return h("span", { class: pct > 0 ? "delta-bad" : "delta-good" }, `${pct > 0 ? "▲ +" : "▼ "}${pct.toFixed(1)}%`);
+  }
+
+  function costCompartmentTable(c) {
+    if (!c.by_compartment.length) return panel("By compartment", null, h("p", { class: "muted" }, "No cost in this period."));
+    return panel("By compartment", "Click a compartment to drill down", h("div", { class: "table-wrap flat" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Compartment"), h("th", { class: "num" }, "Cost"), h("th", {}, "Share"))),
+      h("tbody", {}, c.by_compartment.map((x) => h("tr", {},
+        h("td", { title: x.path || "" }, x.drilldown
+          ? h("button", { class: "link-btn", type: "button", onclick: () => setFilter({ compartment: x.id }) }, x.name)
+          : h("span", { class: x.id ? "" : "muted" }, x.name)),
+        h("td", { class: "num" }, money(x.amount)),
+        shareCell(x.share)))))));
+  }
+
+  function costTopResources(c) {
+    const typeLabel = (k) => ((S.meta && S.meta.types.find((t) => t.key === k)) || {}).label;
+    const body = c.top_resources.length ? h("div", { class: "table-wrap flat" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { class: "num" }, "#"), h("th", {}, "Resource"), h("th", {}, "Service"), h("th", {}, "Compartment"),
+        h("th", {}, "Daily trend"), h("th", { class: "num" }, "Cost"), h("th", {}, "Share"))),
+      h("tbody", {}, c.top_resources.map((r, i) => h("tr", {},
+        h("td", { class: "num muted" }, i + 1),
+        h("td", { class: "name", title: r.id }, r.on_dashboard
+          ? h("button", { class: "link-btn", type: "button", title: "Show in Resources", onclick: () => openResource(r.id) }, r.name)
+          : h("span", {}, r.name, " ", h("button", { class: "link-btn small mono", type: "button", title: "Copy OCID", onclick: () => copy(r.id) }, "copy OCID")),
+        r.type ? h("div", { class: "muted small" }, typeLabel(r.type) || "") : null),
+        h("td", {}, r.service || "—"),
+        h("td", {}, r.compartment_path || "—"),
+        h("td", {}, sparkline(r.daily, 110, 26, `${r.name} daily cost`)),
+        h("td", { class: "num" }, h("b", {}, money(r.amount))),
+        shareCell(r.share)))))) : h("p", { class: "muted" }, "No resource-level cost in this period.");
+    return panel("Top 10 resources by cost", `Last ${c.days} days · includes items not shown on the dashboard, such as backups`, body);
+  }
+
+  function openResource(id) {
+    S.expanded.add(id);
+    setFilter({ view: "", q: id, type: "", category: "", state: "", problems: false, include_terminated: true });
+  }
+
   // --------------------------------------------------------------- actions
   function setFilter(patch) {
     Object.assign(S.filters, patch);
     S.showAll.clear();
     writeHash();
     renderFilters();
+    renderView();
     loadData();
+    if (S.filters.view === "cost") loadCost();
   }
   function clearFilters() {
     setFilter({ type: "", category: "", state: "", q: "", problems: false, region: "" });
@@ -705,8 +1067,9 @@
     const btn = $("#refresh-btn");
     btn.disabled = true; btn.classList.add("spinning");
     try {
-      const r = await api("refresh", null, { method: "POST", headers: { "X-OCIMON": "1" } });
-      toast(r.accepted ? "Refresh started" : "A refresh is already running");
+      const target = S.filters.view === "cost" ? "cost" : "resources";
+      const r = await api("refresh", { target }, { method: "POST", headers: { "X-OCIMON": "1" } });
+      toast(r.accepted ? (target === "cost" ? "Fetching cost data" : "Refresh started") : "A refresh is already running");
     } catch (err) { handleError(err); }
     pollFast();
   }
@@ -718,7 +1081,8 @@
     let n = 0;
     fastTimer = setInterval(async () => {
       await loadHealth();
-      if (++n > 300 || (S.health && !S.health.refreshing && n > 1)) clearInterval(fastTimer);
+      const busy = S.health && (S.health.refreshing || (S.health.cost && S.health.cost.refreshing));
+      if (++n > 300 || (S.health && !busy && n > 1)) clearInterval(fastTimer);
     }, 1000);
   }
 
@@ -758,13 +1122,17 @@
     $("#refresh-btn").addEventListener("click", refreshNow);
     $("#theme-btn").addEventListener("click", cycleTheme);
     $("#errors-btn").addEventListener("click", () => {
+      if (S.filters.view === "cost") setFilter({ view: "" }); // read issues live on the Resources tab
       const p = $("#errors"); p.dataset.open = p.dataset.open === "1" ? "0" : "1"; renderErrors();
       if (p.dataset.open === "1") p.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
     $("#tree-collapse").addEventListener("click", () => { S.openTree.clear(); store.set("openTree", []); renderTree(); });
     $("#nav-toggle").addEventListener("click", () => (document.body.classList.contains("nav-open") ? closeNav() : openNav()));
     $("#scrim").addEventListener("click", closeNav);
-    window.addEventListener("hashchange", () => { readHash(); renderFilters(); loadData(); });
+    window.addEventListener("hashchange", () => { readHash(); renderFilters(); renderView(); loadData(); loadCost(); });
+    for (const tab of document.querySelectorAll(".tab")) {
+      tab.addEventListener("click", () => setFilter({ view: tab.dataset.view === "cost" ? "cost" : "" }));
+    }
   }
 
   async function init() {
@@ -773,6 +1141,7 @@
     bind();
     renderContent();
     try { await loadMeta(); } catch (err) { handleError(err); }
+    renderView();
     await loadHealth();
     setInterval(loadHealth, 5000);
     setInterval(renderStatus, 1000); // countdown + "x ago"
