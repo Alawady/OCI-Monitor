@@ -132,7 +132,7 @@ def resource_view(snapshot: Snapshot, r: Resource, cost: "CostReport | None" = N
         "related": related,
         "console_url": console_url(r, rtype),
         "source": r.source,
-        "cost": cost.for_resource(r.id) if cost else None,
+        "cost": cost.for_resource(r) if cost else None,
         "metrics": r.metrics,
         "health_reasons": r.health_reasons,
     }

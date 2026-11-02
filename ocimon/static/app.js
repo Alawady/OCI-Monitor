@@ -588,6 +588,12 @@
   }
 
   const SEVERITY = { bad: 4, warn: 3, stopped: 2, unknown: 1, ok: 0 };
+  // Types whose billing can't be tied to the individual resource, and why.
+  const UNATTRIBUTED_COST = {
+    mysql_db_system: "OCI bills MySQL HeatWave under internal instance IDs that aren't linked to the DB system, "
+      + "so per-database cost isn't available. The total is on the Cost tab under the MySQL service, "
+      + "and the biggest items appear in Top 10 resources.",
+  };
   function columnsFor(type, multiRegion) {
     const cols = [
       { key: "name", label: "Name", get: (r) => r.name.toLowerCase(), render: (r) => [icon(CHEVRON, "chev"), r.name], cls: "name" },
@@ -598,7 +604,9 @@
     if (S.costCurrency) {
       cols.push({
         key: "cost", label: "Cost/day", num: true, title: "Average daily cost over the last 7 full days (UTC)",
-        get: (r) => (r.cost ? r.cost.avg_day : null), fmt: (v) => (v === null || v === undefined ? "—" : money(v)),
+        get: (r) => (r.cost ? r.cost.avg_day : null),
+        render: (r) => (r.cost ? money(r.cost.avg_day)
+          : UNATTRIBUTED_COST[r.type] ? h("span", { class: "muted", title: UNATTRIBUTED_COST[r.type] }, "n/a") : "—"),
       });
     }
     if (multiRegion) cols.push({ key: "region", label: "Region", get: (r) => r.region });
@@ -701,6 +709,9 @@
       right.append(
         h("dl", { class: "kv" }, metricKeys.map((k) => kv(label[k] || humanize(k),
           k === "fs_status" ? (r.metrics[k] > 0 ? pill("PROBLEM", "bad") : pill("OK", "ok")) : pctCell(r.metrics[k], k)))));
+    }
+    if (!r.cost && UNATTRIBUTED_COST[r.type] && S.costCurrency) {
+      right.append(h("h4", {}, "Cost"), h("p", { class: "muted small wrap" }, UNATTRIBUTED_COST[r.type]));
     }
     if (r.cost) {
       right.append(h("h4", {}, "Cost · last 7 days"), h("div", { class: "cost-detail" },
