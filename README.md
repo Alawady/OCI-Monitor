@@ -8,6 +8,13 @@ A read-only Oracle Cloud Infrastructure (OCI) monitoring dashboard. Start it fro
 
 ## Quick start
 
+You need:
+
+- **Python 3.10+.** On Ubuntu/Debian also run `sudo apt install python3-venv`.
+- **A working OCI CLI config.** Check with `oci os ns get`.
+
+Each user runs their own copy with their own OCI credentials, so they see what their IAM permissions allow.
+
 ```bash
 ./run.sh                    # Linux / macOS / WSL: creates .venv on first run, then starts
 .\run.ps1                   # Windows PowerShell
