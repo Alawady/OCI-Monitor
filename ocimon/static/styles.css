@@ -272,6 +272,8 @@ dl.kv dd { margin: 0; word-break: break-word; }
 }
 @media (max-width: 620px) {
   .topbar { gap: 6px; padding: 0 8px; }
+  .eb-label { display: none; }
+  #errors-btn { padding: 0 8px; }
   .brand { display: none; }
   .search { flex: 1 1 0; min-width: 0; padding: 0 8px; }
   .search kbd { display: none; }
@@ -389,3 +391,9 @@ ul.reasons { margin: 0 0 8px; padding-left: 18px; color: var(--warn); font-weigh
 .tile.tile-alert { border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); }
 .tile.tile-alert .tile-value { color: var(--bad); }
 .tab .problem-badge { margin: 0 0 0 4px; vertical-align: 1px; }
+
+/* --- auto-refresh pause ---------------------------------------------------- */
+#pause-btn.paused { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: var(--warn-bg); }
+#pause-icon { stroke-width: 2.4; }
+#pause-btn.paused #pause-icon { fill: currentColor; stroke-width: 1.5; }
+.paused-note { color: var(--warn) !important; font-weight: 600; }

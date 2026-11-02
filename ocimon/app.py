@@ -92,8 +92,15 @@ def create_app(settings: Settings, refresher: Refresher,
             "last_refresh": s.finished_at or None,
         }
 
+    def refreshers() -> list[Refresher]:
+        return [r for r in (refresher, cost_refresher) if r is not None]
+
     @api.get("/api/health")
-    def health():
+    def health(viewer: bool = False):
+        # viewer=1 comes from a dashboard tab that is currently visible; it keeps refreshes running.
+        if viewer:
+            for r in refreshers():
+                r.viewer_seen()
         s = refresher.snapshot
         errors = [e.__dict__ | {"compartment_name": s.compartment_name(e.compartment_id),
                                 "compartment_path": s.paths.get(e.compartment_id or "")}
@@ -115,6 +122,7 @@ def create_app(settings: Settings, refresher: Refresher,
             "last_refresh_iso": isoformat(_ts(s.finished_at)) if s else None,
             "duration_s": round(s.duration, 2) if s else None,
             "next_refresh_at": refresher.next_refresh_at,
+            "auto_refresh": {"paused": refresher.paused, "idle": refresher.idle, "idle_after": refresher.idle_after},
             "last_failure": refresher.last_failure,
             "resource_count": len(s.resources) if s else 0,
             "regions": s.regions if s else [],
@@ -143,6 +151,7 @@ def create_app(settings: Settings, refresher: Refresher,
             "refresh_interval": cost_refresher.interval,
             "last_refresh": report.finished_at if report else None,
             "next_refresh_at": cost_refresher.next_refresh_at,
+            "paused": cost_refresher.paused,
             "duration_s": round(report.elapsed, 2) if report else None,
             "error": report.error if report else cost_refresher.last_failure,
             "error_kind": report.error_kind if report else ("error" if cost_refresher.last_failure else None),
@@ -168,6 +177,13 @@ def create_app(settings: Settings, refresher: Refresher,
         else:
             accepted = refresher.trigger()
         return {"accepted": accepted, "refreshing": True, "target": target}
+
+    @api.post("/api/auto-refresh")
+    def auto_refresh(enabled: bool):
+        """Pause or resume scheduled refreshes (inventory and cost). Manual refresh still works."""
+        for r in refreshers():
+            r.set_paused(not enabled)
+        return {"paused": refresher.paused}
 
     @api.get("/api/meta")
     def meta():

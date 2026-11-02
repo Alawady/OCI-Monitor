@@ -70,6 +70,14 @@ The UI has these parts:
 - **Cost/day column.** Each resource row shows its average daily cost over the last 7 full days (sortable), and the expanded row shows a 7-day trend.
 - **Other.** Light, dark and auto themes, responsive down to phone width, and URL-hash filters, so a filtered view can be bookmarked.
 
+### Auto-refresh
+
+- **Refreshes while watched:** while a dashboard tab is visible, data refreshes every `--refresh` seconds (cost every `--cost-refresh`).
+- **Background tabs go quiet:** a background tab stops polling, and when no tab has been visible for `--idle-after` seconds (5 minutes by default), the server **stops calling OCI**.
+- **Catches up on return:** come back to the tab and it refreshes at once if the data is older than the interval.
+- **Cost:** a full refresh of 5 regions is about 190 read calls, so an unwatched dashboard no longer makes ~138,000 calls a day.
+- **Pause button (⏸):** pauses scheduled refreshes, for inventory and cost. **Refresh now** still works while paused. Pausing applies to everyone using that server process, and a restart resumes it.
+
 ### Cost tab
 
 The Cost tab follows the compartment selected in the sidebar and the region selector:
@@ -142,6 +150,7 @@ TERMINATED and DELETED resources show red but never count as problems, because t
 | `--refresh` | `OCIMON_REFRESH` | `120` | Inventory refresh interval in seconds (minimum 10). |
 | `--cost-refresh` | `OCIMON_COST_REFRESH` | `3600` | Cost data refresh interval in seconds (minimum 300). |
 | `--no-cost` | | | Don't fetch cost data; hides the Cost tab. |
+| `--idle-after` | `OCIMON_IDLE_AFTER` | `300` | Stop calling OCI when no dashboard tab has been visible for this many seconds. `0` = keep refreshing with nobody watching. |
 | `--token` | `OCIMON_TOKEN` | *(none)* | Access token required on every request. |
 | `--workers` | `OCIMON_WORKERS` | `16` | Parallel OCI API calls. |
 | `--demo` | | | Serve fake data. No OCI access is needed. |
@@ -231,6 +240,7 @@ All endpoints return JSON and are relative to the base path.
 | `GET /api/health` | Last refresh time, duration, next refresh, read errors, auth type |
 | `GET /api/meta` | Regions, categories and resource types |
 | `GET /api/cost?days=7\|14\|30` | Cost tab data. Also accepts `compartment` and `region` |
+| `POST /api/auto-refresh?enabled=true\|false` | Resume or pause scheduled refreshes. Requires the header `X-OCIMON: 1` |
 | `POST /api/refresh` | Trigger an immediate refresh. Add `?target=cost` to refresh cost data instead. Requires the header `X-OCIMON: 1` |
 
 `/api/summary`, `/api/compartments` and `/api/resources` accept these filters:
