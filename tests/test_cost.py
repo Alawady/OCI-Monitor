@@ -10,6 +10,7 @@ from ocimon.app import create_app
 from ocimon.cost import CostReport, CostRow, DemoCostSource, LiveCostSource, ResourceCostRow, cost_view
 from ocimon.demo import DemoSource, build_demo
 from ocimon.filters import resource_view
+from ocimon.models import Resource
 from ocimon.refresher import Refresher
 from ocimon.settings import Settings
 
@@ -144,7 +145,7 @@ def test_demo_view_top_resources(demo):
 def test_resource_cost_lookup(demo):
     snap, report = demo
     inst = next(r for r in snap.resources if r.name == "prod-web-01")
-    cost = report.for_resource(inst.id.upper())
+    cost = report.for_resource(inst)
     assert cost and len(cost["daily"]) == 7 and cost["avg_day"] > 0
     assert resource_view(snap, inst, report)["cost"] == cost
     assert resource_view(snap, inst, None)["cost"] is None
@@ -192,3 +193,27 @@ def test_cost_endpoint_permission_error():
     d = c.get("/api/cost").json()
     assert d["status"] == "error" and d["meta"]["error_kind"] == "permission"
     assert c.get("/api/resources").json()["currency"] is None  # no cost column without data
+
+
+def test_buckets_match_by_namespace_and_name():
+    """Object Storage bills buckets as "namespace/name" (sometimes just "name"), not by OCID."""
+    bucket = Resource(id="ocid1.bucket.oc1.r1.xyz", name="backups", type="bucket", region="r1",
+                      compartment_id="c1", refs={"namespace": "ns1", "bucket": "backups"})
+    other_region = Resource(id="ocid1.bucket.oc1.r2.abc", name="backups", type="bucket", region="r2",
+                            compartment_id="c1", refs={"namespace": "ns1", "bucket": "backups"})
+    res = []
+    for back in range(1, 8):
+        day = TODAY - timedelta(days=back)
+        res += [ResourceCostRow(day, "ns1/backups", "Object Storage", "c1", "r1", 2.0),
+                ResourceCostRow(day, "backups", "Object Storage", "c1", "r1", 0.5),  # same bucket, bare name
+                ResourceCostRow(day, "ns1/backups", "Object Storage", "c1", "r2", 9.0)]  # same name, other region
+    report = CostReport([], res, "USD", TODAY)
+    assert report.for_resource(bucket)["avg_day"] == 2.5
+    assert report.for_resource(other_region)["avg_day"] == 9.0
+
+    snap = build_demo(0)
+    snap.resources = [bucket, other_region]
+    snap.__dict__.pop("by_id", None)
+    top = cost_view(report, snap, 7)["top_resources"]
+    assert [(t["id"], t["amount"], t["on_dashboard"]) for t in top] == [
+        ("ocid1.bucket.oc1.r2.abc", 63.0, True), ("ocid1.bucket.oc1.r1.xyz", 17.5, True)]

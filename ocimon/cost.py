@@ -29,6 +29,7 @@ import oci
 from .auth import Auth
 from .collectors.base import list_all
 from .engine import CLIENT_TIMEOUT, RETRY_STRATEGY
+from .models import Resource
 from .snapshot import Snapshot
 
 log = logging.getLogger("ocimon.cost")
@@ -93,21 +94,45 @@ class CostReport:
         return {s: i + 1 for i, s in enumerate(ranked[:SERIES_SLOTS])}
 
     @cached_property
-    def resource_week(self) -> dict[str, dict[str, Any]]:
-        """Per-resource cost over the last 7 full days, for the resource tables."""
+    def resource_week(self) -> dict[str, list[float]]:
+        """Daily cost over the last 7 full days per billing key (see billing_key)."""
         days = [self.today - timedelta(days=i) for i in range(7, 0, -1)]
         index = {d: i for i, d in enumerate(days)}
         daily: dict[str, list[float]] = {}
         for r in self.resource_rows:
             i = index.get(r.day)
             if i is not None:
-                daily.setdefault(r.resource_id, [0.0] * 7)[i] += r.amount
-        return {rid: {"daily": [round(v, 2) for v in vals], "total_7d": round(sum(vals), 2),
-                      "avg_day": round(sum(vals) / 7, 2)}
-                for rid, vals in daily.items() if sum(vals) > 0}
+                daily.setdefault(billing_key(r.resource_id, r.region), [0.0] * 7)[i] += r.amount
+        return daily
 
-    def for_resource(self, resource_id: str) -> dict[str, Any] | None:
-        return self.resource_week.get(resource_id.lower())
+    def for_resource(self, resource: Resource) -> dict[str, Any] | None:
+        """Last-7-day cost for a dashboard resource, summed over all its billing keys."""
+        found = [self.resource_week[k] for k in billing_keys(resource) if k in self.resource_week]
+        if not found:
+            return None
+        vals = [sum(day) for day in zip(*found)]
+        if sum(vals) <= 0:
+            return None
+        return {"daily": [round(v, 2) for v in vals], "total_7d": round(sum(vals), 2),
+                "avg_day": round(sum(vals) / 7, 2)}
+
+
+def billing_key(resource_id: str, region: str) -> str:
+    """How a Usage API row identifies what it bills. OCIDs are global; anything else (bucket
+    names) is only unique within a region, so it's scoped by region."""
+    rid = (resource_id or "").strip().lower()
+    return rid if rid.startswith("ocid1.") else f"{region}|{rid}"
+
+
+def billing_keys(resource: Resource) -> list[str]:
+    """Every key the Usage API may bill a dashboard resource under."""
+    keys = [resource.id.lower()]
+    if resource.type == "bucket":
+        # Object Storage bills buckets as "namespace/bucket", and sometimes as just "bucket".
+        name = (resource.refs.get("bucket") or resource.name).lower()
+        ns = (resource.refs.get("namespace") or "").lower()
+        keys += [f"{resource.region}|{ns}/{name}", f"{resource.region}|{name}"] if ns else [f"{resource.region}|{name}"]
+    return keys
 
 
 # --- Live source ---------------------------------------------------------------
@@ -228,7 +253,9 @@ class DemoCostSource:
                     amount *= 0.45  # today is partial
                 rows.append(CostRow(day, service, r.compartment_id, r.region, round(amount, 4)))
                 if back < RESOURCE_DAYS:
-                    resource_rows.append(ResourceCostRow(day, r.id.lower(), service, r.compartment_id,
+                    # Like OCI: buckets are billed by "namespace/name", everything else by OCID.
+                    rid = f"{r.refs.get('namespace')}/{r.name}" if r.type == "bucket" else r.id.lower()
+                    resource_rows.append(ResourceCostRow(day, rid, service, r.compartment_id,
                                                          r.region, round(amount, 4)))
         # Spend not tied to anything on the dashboard: backups, egress, logging.
         shared = [("Block Storage", "ocid1.volumebackup.oc1.me-jeddah-1.demo", 14.0),
@@ -258,6 +285,7 @@ _OCID_KINDS = {
 
 
 def _ocid_label(resource_id: str) -> str:
+    resource_id = resource_id.split("|", 1)[-1]  # drop the region scope of non-OCID keys
     parts = resource_id.split(".")
     if len(parts) > 2 and parts[0] == "ocid1":
         # The OCID tail tells apart several items of the same kind.
@@ -405,15 +433,20 @@ def _top_resources(report: CostReport, snapshot: Snapshot | None, w: _Window,
     daily: dict[str, list[float]] = {}
     service: dict[str, str] = {}
     compartment: dict[str, str] = {}
+    # Billing keys that belong to a dashboard resource are grouped under its id.
+    owner = {key: res for res in (snapshot.resources if snapshot else []) for key in billing_keys(res)}
+    known = {res.id.lower(): res for res in owner.values()}
     for r in report.resource_rows:
         i = index.get(r.day)
         if i is None or not keep(r.compartment_id, r.region):
             continue
-        daily.setdefault(r.resource_id, [0.0] * w.days)[i] += r.amount
-        service.setdefault(r.resource_id, r.service)
-        compartment.setdefault(r.resource_id, r.compartment_id)
+        key = billing_key(r.resource_id, r.region)
+        res = owner.get(key)
+        rid = res.id.lower() if res else key
+        daily.setdefault(rid, [0.0] * w.days)[i] += r.amount
+        service.setdefault(rid, r.service)
+        compartment.setdefault(rid, r.compartment_id)
 
-    known = {res.id.lower(): res for res in snapshot.resources} if snapshot else {}
     totals = {rid: sum(v) for rid, v in daily.items()}
     grand = sum(totals.values())
     covered = round(sum(t for rid, t in totals.items() if rid in known) / grand * 100, 1) if grand else None
