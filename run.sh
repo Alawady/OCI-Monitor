@@ -16,11 +16,25 @@ PID_FILE=.ocimon.pid
 LOG_FILE=ocimon.log
 
 ensure_venv() {
+  local python="${PYTHON:-python3}"
   if [ ! -x .venv/bin/python ]; then
+    if ! "$python" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+      echo "OCI Monitor needs Python 3.10 or newer ($python is $("$python" --version 2>&1))." >&2
+      exit 1
+    fi
     echo "Creating virtual environment in .venv ..."
-    "${PYTHON:-python3}" -m venv .venv
+    if ! "$python" -m venv .venv; then
+      rm -rf .venv  # a half-created venv would make every later run fail
+      echo "Could not create a virtual environment. On Ubuntu/Debian run: sudo apt install python3-venv" >&2
+      exit 1
+    fi
+  fi
+  # (Re)install when the venv is new or requirements.txt changed (e.g. after git pull).
+  if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
+    echo "Installing dependencies ..."
     .venv/bin/python -m pip install --quiet --upgrade pip
     .venv/bin/python -m pip install --quiet -r requirements.txt
+    touch .venv/.installed
   fi
 }
 
