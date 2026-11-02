@@ -16,6 +16,8 @@ from ocimon.models import Compartment
 TENANCY = "ocid1.tenancy.oc1..root"
 REGION = "me-jeddah-1"
 READ_PREFIXES = ("list_", "get_", "search_")
+# Read-only queries whose SDK names don't follow the list_/get_ convention.
+READ_ONLY_CALLS = {"request_summarized_usages"}  # Usage API cost query (a POST, but read-only)
 
 
 def ns(**kw: Any) -> SimpleNamespace:
@@ -42,7 +44,7 @@ class FakeClient:
     def __getattr__(self, name: str) -> Callable[..., Resp]:
         if name.startswith("_"):
             raise AttributeError(name)
-        assert name.startswith(READ_PREFIXES), f"collector called non-read operation {name}"
+        assert name.startswith(READ_PREFIXES) or name in READ_ONLY_CALLS, f"collector called non-read operation {name}"
         if name not in self._handlers:
             raise AssertionError(f"unexpected SDK call {name}")
 

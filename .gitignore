@@ -19,6 +19,11 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Background mode (./run.sh start)
+ocimon.log
+ocimon.err.log
+.ocimon.pid
+
 # Never commit OCI credentials
 *.pem
 .oci/

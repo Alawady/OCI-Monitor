@@ -21,10 +21,17 @@ class Snapshot:
     tenancy_name: str | None = None
     mode: str = "live"
     stats: dict[str, Any] = field(default_factory=dict)
+    # Monotonic run time. Wall-clock finished-started also counts time the machine slept mid-refresh.
+    elapsed: float | None = None
 
     @property
     def duration(self) -> float:
+        if self.elapsed is not None:
+            return self.elapsed
         return max(0.0, self.finished_at - self.started_at)
+
+    def log_summary(self) -> str:
+        return f"{len(self.resources)} resources, {len(self.errors)} errors in {self.duration:.1f}s"
 
     @cached_property
     def by_id(self) -> dict[str, Resource]:

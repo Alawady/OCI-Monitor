@@ -1,23 +1,26 @@
-"""In-memory cache of the latest Snapshot, refreshed on a background thread."""
+"""In-memory cache of the latest result of a source, refreshed on a background thread.
+
+Used for both the resource inventory (Snapshot) and cost data (CostReport).
+"""
 
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from typing import Callable
-
-from .snapshot import Snapshot
+from typing import Any, Callable
 
 log = logging.getLogger("ocimon.refresher")
 
 
 class Refresher:
-    def __init__(self, source: Callable[[], Snapshot], interval: float, mode: str = "live") -> None:
+    def __init__(self, source: Callable[[], Any], interval: float, mode: str = "live", name: str = "") -> None:
         self.source = source
+        self.name = name  # log prefix, e.g. "cost"
+
         self.interval = max(10.0, float(interval))
         self.mode = mode
-        self._snapshot: Snapshot | None = None
+        self._snapshot: Any = None
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -30,11 +33,11 @@ class Refresher:
         self.next_refresh_at: float | None = None
 
     @property
-    def snapshot(self) -> Snapshot | None:
+    def snapshot(self) -> Any:
         with self._lock:
             return self._snapshot
 
-    def refresh_once(self) -> Snapshot | None:
+    def refresh_once(self) -> Any:
         with self._lock:
             if self.refreshing:
                 return self._snapshot
@@ -46,7 +49,7 @@ class Refresher:
                 # Shutting down mid-refresh (Ctrl+C, server exit): thread pools refuse new work. Not an error.
                 return self.snapshot
             # Keep serving the previous snapshot; surface the failure in /api/health.
-            log.exception("refresh failed")
+            log.exception("%srefresh failed", self._prefix)
             self.last_failure = f"{type(exc).__name__}: {exc}"[:500]
             return self.snapshot
         else:
@@ -54,12 +57,15 @@ class Refresher:
                 self._snapshot = snap
                 self.refresh_count += 1
             self.last_failure = None
-            log.info("refresh #%d: %d resources, %d errors in %.1fs", self.refresh_count,
-                     len(snap.resources), len(snap.errors), snap.duration)
+            log.info("%srefresh #%d: %s", self._prefix, self.refresh_count, snap.log_summary())
             return snap
         finally:
             with self._lock:
                 self.refreshing = False
+
+    @property
+    def _prefix(self) -> str:
+        return f"{self.name} " if self.name else ""
 
     def trigger(self) -> bool:
         """Request an immediate refresh. Returns False if one is already running."""
@@ -77,7 +83,8 @@ class Refresher:
 
     def start(self) -> None:
         if self._thread is None:
-            self._thread = threading.Thread(target=self._loop, name="ocimon-refresh", daemon=True)
+            thread_name = f"ocimon-refresh-{self.name}" if self.name else "ocimon-refresh"
+            self._thread = threading.Thread(target=self._loop, name=thread_name, daemon=True)
             self._thread.start()
 
     def stop(self) -> None:

@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .collectors import resource_types
+from .cost import cost_view
 from .filters import ResourceQuery, compartment_tree, filter_resources, resource_view, summarize
 from .models import CATEGORIES, isoformat
 from .refresher import Refresher
@@ -47,7 +48,8 @@ def _filters(compartment: str | None, region: str | None, type_: str | None, sta
 
 
 def create_app(settings: Settings, refresher: Refresher,
-               auth_info: dict[str, Any] | Callable[[], dict[str, Any]] | None = None) -> FastAPI:
+               auth_info: dict[str, Any] | Callable[[], dict[str, Any]] | None = None,
+               cost_refresher: Refresher | None = None) -> FastAPI:
     api = FastAPI(title="OCI Monitor", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
 
     def snap():
@@ -80,8 +82,10 @@ def create_app(settings: Settings, refresher: Refresher,
         items = filter_resources(s, query)
         items.sort(key=lambda r: (order.get(types[r.type].category if r.type in types else "", 99),
                                   type_order.get(r.type, 99), r.name.lower()))
+        report = cost_report()
         return {
-            "items": [resource_view(s, r) for r in items],
+            "items": [resource_view(s, r, report) for r in items],
+            "currency": report.currency if report else None,
             "count": len(items),
             "total": len(s.resources),
             "last_refresh": s.finished_at or None,
@@ -117,12 +121,52 @@ def create_app(settings: Settings, refresher: Refresher,
             "stats": s.stats if s else {},
             "auth": auth_info() if callable(auth_info) else auth_info,
             "errors": errors,
+            "cost": cost_status(),
         }
 
+    def cost_report():
+        report = cost_refresher.snapshot if cost_refresher else None
+        return report if report is not None and not report.error else None
+
+    def cost_status() -> dict[str, Any]:
+        if cost_refresher is None:
+            return {"status": "disabled"}
+        report = cost_refresher.snapshot
+        if report is None:
+            status = "error" if cost_refresher.last_failure else "loading"
+        else:
+            status = "error" if report.error else ("stale" if cost_refresher.last_failure else "ok")
+        return {
+            "status": status,
+            "refreshing": cost_refresher.refreshing,
+            "refresh_interval": cost_refresher.interval,
+            "last_refresh": report.finished_at if report else None,
+            "next_refresh_at": cost_refresher.next_refresh_at,
+            "duration_s": round(report.elapsed, 2) if report else None,
+            "error": report.error if report else cost_refresher.last_failure,
+            "error_kind": report.error_kind if report else ("error" if cost_refresher.last_failure else None),
+            "last_failure": cost_refresher.last_failure,
+        }
+
+    @api.get("/api/cost")
+    def cost(days: int = 7, compartment: str | None = None, region: str | None = None):
+        status = cost_status()
+        report = cost_refresher.snapshot if cost_refresher else None
+        if report is None or report.error:
+            return {"status": status["status"], "meta": status}
+        s = refresher.snapshot
+        view = cost_view(report, s, days, compartment if s and compartment in s.compartments else None, region)
+        return {**view, "meta": status}
+
     @api.post("/api/refresh", status_code=202)
-    def refresh():
-        accepted = refresher.trigger()
-        return {"accepted": accepted, "refreshing": True}
+    def refresh(target: str = "resources"):
+        if target == "cost":
+            if cost_refresher is None:
+                return JSONResponse({"detail": "Cost data is disabled"}, status_code=409)
+            accepted = cost_refresher.trigger()
+        else:
+            accepted = refresher.trigger()
+        return {"accepted": accepted, "refreshing": True, "target": target}
 
     @api.get("/api/meta")
     def meta():
@@ -132,6 +176,7 @@ def create_app(settings: Settings, refresher: Refresher,
             "mode": refresher.mode,
             "regions": s.regions if s else [],
             "tenancy_name": s.tenancy_name if s else None,
+            "cost_enabled": cost_refresher is not None,
             "categories": [c.__dict__ for c in CATEGORIES],
             "types": [{"key": t.key, "label": t.label, "category": t.category} for t in resource_types().values()],
         }

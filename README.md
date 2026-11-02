@@ -1,9 +1,9 @@
 # OCI-Monitor
 
-A read-only Oracle Cloud Infrastructure (OCI) monitoring dashboard. Start it from a terminal and it shows the live status of your OCI resources in the browser, grouped by compartment.
+A read-only Oracle Cloud Infrastructure (OCI) monitoring dashboard. Start it from a terminal and it shows the live status of your OCI resources in the browser, grouped by compartment, plus a **Cost** tab with daily spend.
 
 - Reuses your existing OCI CLI configuration (`~/.oci/config`). No new credentials are needed.
-- **Strictly read-only**: it only calls `list_*`, `get_*` and Resource Search. A unit test fails the build if a mutating SDK call ever appears in the code.
+- **Strictly read-only**: it only calls `list_*`, `get_*`, Resource Search and the Usage API cost query. A unit test fails the build if a mutating SDK call ever appears in the code.
 - A single page with no build step and no CDN, so it works offline.
 
 ## Quick start
@@ -22,6 +22,20 @@ python3 -m venv .venv
 ```
 
 The dashboard opens at <http://127.0.0.1:8080/>. Add `--no-browser` to stop it opening a browser. Under WSL the URL is handed to your Windows browser.
+
+### Running in the background
+
+So you don't have to keep a terminal open:
+
+```bash
+./run.sh start --regions all   # starts in the background; flags as usual
+./run.sh status                # running? on which URL?
+./run.sh logs                  # follow the log (Ctrl+C stops following, not the app)
+./run.sh restart --regions all # e.g. after `git pull`
+./run.sh stop
+```
+
+The log goes to `ocimon.log`. On Windows, `.\run.ps1 start | stop | status | logs` does the same. The app stops when the machine shuts down; run `./run.sh start` again after a reboot. For an always-on, shared instance, see [Running behind a reverse proxy](#running-behind-a-reverse-proxy).
 
 To try the UI without OCI access, use `./run.sh --demo`. It serves a realistic fake tenancy with healthy, stopped, failing and unreadable resources.
 
@@ -46,7 +60,30 @@ The UI has these parts:
 - **Search and filters.** A global search (press `/`) matches name, OCID, IP, shape and compartment. You can also filter by type, state and region, toggle **Only show problems**, and toggle **Show terminated** (terminated items are hidden by default).
 - **Empty results.** When nothing matches, the page lists the active filters as chips, each removable with one click.
 - **Read issues panel.** Lists every compartment or service that could not be read, such as one with no permission or one that was throttled. The rest of the page still loads.
+- **Cost/day column.** Each resource row shows its average daily cost over the last 7 full days (sortable), and the expanded row shows a 7-day trend.
 - **Other.** Light, dark and auto themes, responsive down to phone width, and URL-hash filters, so a filtered view can be bookmarked.
+
+### Cost tab
+
+The Cost tab follows the compartment selected in the sidebar and the region selector:
+
+- **Summary tiles:** total for the last 7, 14 or 30 days with the change against the previous period, the daily average, yesterday, today so far, and the share of spend that matches resources on the dashboard.
+- **Daily cost by service:** a stacked chart, with a hover tooltip per day and a table view.
+- **By service and by compartment:** click a compartment to drill down.
+- **Top 10 resources by cost:** with a daily trend. This includes items the dashboard doesn't list, such as volume backups. Click a resource to open it in the Resources tab.
+
+How it stays light:
+
+- **Its own schedule.** Cost data comes from the OCI Usage API on its own background thread, **once an hour** (`--cost-refresh`). That's two queries, taking about 10 seconds for a medium tenancy.
+- **Never in the page's path.** The page and the inventory refresh never wait on it. Pages are served from memory.
+- **Fails on its own.** If the Usage API is denied or fails, only the Cost tab shows a message.
+
+Notes:
+
+- **UTC days.** Days are in UTC, as the Usage API reports them.
+- **Today is partial.** Usage data arrives a few hours late.
+- **Contract pricing.** Amounts are the billed (`computed_amount`) cost under your contract, so credits or discounts may make the invoice differ slightly.
+- **MySQL.** MySQL HeatWave usage is billed against an internal OCID, so it appears under MySQL in the service breakdown rather than on the DB system row.
 
 A resource counts as a **problem** if any of these is true:
 
@@ -68,7 +105,9 @@ TERMINATED and DELETED resources show red but never count as problems, because t
 | `--auth` | `OCI_CLI_AUTH` | `auto` | `auto`, `api_key`, `security_token` or `instance_principal`. |
 | `--regions` | `OCIMON_REGIONS` | profile region | Comma-separated list, or `all` for every subscribed region. |
 | `--compartment` | `OCIMON_COMPARTMENT` | tenancy | Root compartment OCID to monitor. Only this compartment and its subtree are shown. |
-| `--refresh` | `OCIMON_REFRESH` | `120` | Background refresh interval in seconds (minimum 10). |
+| `--refresh` | `OCIMON_REFRESH` | `120` | Inventory refresh interval in seconds (minimum 10). |
+| `--cost-refresh` | `OCIMON_COST_REFRESH` | `3600` | Cost data refresh interval in seconds (minimum 300). |
+| `--no-cost` | | | Don't fetch cost data; hides the Cost tab. |
 | `--token` | `OCIMON_TOKEN` | *(none)* | Access token required on every request. |
 | `--workers` | `OCIMON_WORKERS` | `16` | Parallel OCI API calls. |
 | `--demo` | | | Serve fake data. No OCI access is needed. |
@@ -110,6 +149,7 @@ Allow group OCIMonitorReaders to read cluster-family in tenancy
 Allow group OCIMonitorReaders to read buckets in tenancy
 Allow group OCIMonitorReaders to read functions-family in tenancy
 Allow group OCIMonitorReaders to read api-gateway-family in tenancy
+Allow group OCIMonitorReaders to read usage-reports in tenancy
 ```
 
 Notes:
@@ -118,6 +158,7 @@ Notes:
 - **Narrower scope.** You can grant per compartment (`in compartment X`) instead of `in tenancy`. Anything you can't read appears in the **read issues** panel, and the rest of the page still loads.
 - **Bucket visibility.** `read buckets` is needed to show public/private and object counts. With only `inspect buckets`, buckets still appear but without those details. No access to object contents is needed.
 - **Avoid `read all-resources`.** It works, but it also grants reading object contents in Object Storage.
+- **Cost tab.** `read usage-reports` must be granted at tenancy level, because the Usage API reports on the whole tenancy. Without it, the Cost tab shows the missing policy and everything else works. Tenancy administrators already have it.
 
 ## Running behind a reverse proxy
 
@@ -153,7 +194,8 @@ All endpoints return JSON and are relative to the base path.
 | `GET /api/resources` | Filtered resource list |
 | `GET /api/health` | Last refresh time, duration, next refresh, read errors, auth type |
 | `GET /api/meta` | Regions, categories and resource types |
-| `POST /api/refresh` | Trigger an immediate refresh. Requires the header `X-OCIMON: 1` |
+| `GET /api/cost?days=7\|14\|30` | Cost tab data. Also accepts `compartment` and `region` |
+| `POST /api/refresh` | Trigger an immediate refresh. Add `?target=cost` to refresh cost data instead. Requires the header `X-OCIMON: 1` |
 
 `/api/summary`, `/api/compartments` and `/api/resources` accept these filters:
 

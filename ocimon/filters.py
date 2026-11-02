@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from .collectors import resource_types
 from .console import console_url
 from .models import CATEGORIES, Resource, isoformat
 from .snapshot import Snapshot
+
+if TYPE_CHECKING:
+    from .cost import CostReport
 
 
 def _split(value: str | None) -> set[str]:
@@ -90,7 +93,7 @@ def filter_resources(snapshot: Snapshot, query: ResourceQuery) -> list[Resource]
     return out
 
 
-def resource_view(snapshot: Snapshot, r: Resource) -> dict[str, Any]:
+def resource_view(snapshot: Snapshot, r: Resource, cost: "CostReport | None" = None) -> dict[str, Any]:
     types = resource_types()
     rtype = types.get(r.type)
     related = []
@@ -125,6 +128,7 @@ def resource_view(snapshot: Snapshot, r: Resource) -> dict[str, Any]:
         "related": related,
         "console_url": console_url(r, rtype),
         "source": r.source,
+        "cost": cost.for_resource(r.id) if cost else None,
     }
 
 

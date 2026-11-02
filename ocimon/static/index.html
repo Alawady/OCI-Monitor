@@ -55,6 +55,14 @@
     <main id="main" class="main">
       <div id="banner" class="banner" role="alert" hidden></div>
 
+      <nav id="tabs" class="tabs" role="tablist" aria-label="View" hidden>
+        <button class="tab active" type="button" role="tab" data-view="resources" aria-selected="true" aria-controls="resources-view">Resources</button>
+        <button class="tab" type="button" role="tab" data-view="cost" aria-selected="false" aria-controls="cost-view">Cost</button>
+      </nav>
+
+      <section id="cost-view" class="cost-view" role="tabpanel" aria-label="Cost" hidden></section>
+
+      <div id="resources-view" role="tabpanel" aria-label="Resources">
       <section id="cards" class="cards" aria-label="Summary"></section>
 
       <section class="toolbar" aria-label="Filters">
@@ -74,6 +82,7 @@
       <section id="errors" class="errors-panel" hidden aria-label="Read errors"></section>
 
       <div id="content" class="content"></div>
+      </div>
     </main>
   </div>
 
