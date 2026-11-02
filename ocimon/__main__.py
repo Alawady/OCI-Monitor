@@ -96,9 +96,10 @@ def main(argv: list[str] | None = None) -> None:
     from .app import create_app
     from .refresher import Refresher
 
-    refresher = Refresher(source, settings.refresh, mode=mode)
+    refresher = Refresher(source, settings.refresh, mode=mode, idle_after=settings.idle_after)
     # Cost runs on its own slower schedule and thread, so it never delays the inventory or the page.
-    cost_refresher = (Refresher(cost_factory(refresher), settings.cost_refresh, mode=mode, name="cost")
+    cost_refresher = (Refresher(cost_factory(refresher), settings.cost_refresh, mode=mode, name="cost",
+                                idle_after=settings.idle_after)
                       if cost_factory else None)
     app = create_app(settings, refresher, auth_info, cost_refresher)
     refresher.start()

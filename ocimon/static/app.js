@@ -186,7 +186,8 @@
 
   async function loadHealth() {
     try {
-      const health = await api("health");
+      // viewer=1 tells the server someone is looking, which keeps OCI refreshes running.
+      const health = await api("health", { viewer: document.hidden ? "" : "1" });
       setConnection(true);
       const changed = health.last_refresh !== (S.health && S.health.last_refresh);
       const prevCost = S.health && S.health.cost;
@@ -275,7 +276,9 @@
       upd.textContent = hl.status === "error" ? "Refresh failed" : "Collecting…";
     }
     const auto = $("#auto-refresh");
+    renderPauseButton(hl.auto_refresh && hl.auto_refresh.paused);
     if (hl.refreshing) auto.textContent = "Refreshing now…";
+    else if (hl.auto_refresh && hl.auto_refresh.paused) auto.textContent = "Auto-refresh paused · use Refresh now to update";
     else if (hl.next_refresh_at) {
       auto.textContent = `Auto-refresh every ${fmtInterval(hl.refresh_interval)} · next in ${fmtDuration(hl.next_refresh_at - Date.now() / 1000)}`;
     } else auto.textContent = `Auto-refresh every ${fmtInterval(hl.refresh_interval)}`;
@@ -296,7 +299,8 @@
     const eb = $("#errors-btn");
     const n = hl.errors.length;
     eb.hidden = n === 0;
-    eb.textContent = `⚠ ${n} read issue${n === 1 ? "" : "s"}`;
+    eb.title = `${n} read issue${n === 1 ? "" : "s"}`;
+    eb.replaceChildren(`⚠ ${n}`, h("span", { class: "eb-label" }, ` read issue${n === 1 ? "" : "s"}`));
   }
 
   function renderCostStatus(hl) {
@@ -305,7 +309,9 @@
     upd.textContent = c.last_refresh ? `Cost updated ${fmtAgo(c.last_refresh)}` : (c.status === "error" ? "Cost unavailable" : "Fetching cost…");
     upd.title = c.last_refresh ? new Date(c.last_refresh * 1000).toLocaleString() : "";
     const auto = $("#auto-refresh");
+    renderPauseButton(c.paused);
     if (c.refreshing) auto.textContent = "Fetching cost data…";
+    else if (c.paused) auto.textContent = "Auto-refresh paused · use Refresh now to update";
     else if (c.next_refresh_at) auto.textContent = `Cost refresh every ${fmtInterval(c.refresh_interval)} · next in ${fmtDuration(c.next_refresh_at - Date.now() / 1000)}`;
     else auto.textContent = `Cost refresh every ${fmtInterval(c.refresh_interval)}`;
     setRefreshButton(!!c.refreshing);
@@ -1219,6 +1225,43 @@
     }, 1000);
   }
 
+  function renderPauseButton(paused) {
+    const btn = $("#pause-btn");
+    const label = paused ? "Resume auto-refresh" : "Pause auto-refresh";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("aria-pressed", String(!!paused));
+    btn.classList.toggle("paused", !!paused);
+    $("#pause-icon").setAttribute("d", paused ? "M8 5.5v13l11-6.5z" : "M9 5v14M15 5v14");
+    $("#auto-refresh").classList.toggle("paused-note", !!paused);
+  }
+
+  async function togglePause() {
+    const paused = !!(S.health && S.health.auto_refresh && S.health.auto_refresh.paused);
+    try {
+      await api("auto-refresh", { enabled: paused ? "true" : "false" }, { method: "POST", headers: { "X-OCIMON": "1" } });
+      toast(paused ? "Auto-refresh resumed" : "Auto-refresh paused");
+    } catch (err) { handleError(err); }
+    await loadHealth();
+  }
+
+  // Poll only while the tab is visible. A hidden tab sends nothing, so the server can stop
+  // calling OCI; on return we poll at once and quickly while the catch-up refresh runs.
+  let healthTimer = null; let statusTimer = null;
+  function startPolling() {
+    stopPolling();
+    healthTimer = setInterval(loadHealth, 5000);
+    statusTimer = setInterval(renderStatus, 1000); // countdown + "x ago"
+  }
+  function stopPolling() {
+    clearInterval(healthTimer); clearInterval(statusTimer); clearInterval(fastTimer);
+  }
+  function onVisibilityChange() {
+    if (document.hidden) { stopPolling(); return; }
+    startPolling();
+    pollFast();
+  }
+
   function cycleTheme() {
     const order = ["auto", "light", "dark"];
     const next = order[(order.indexOf(store.get("theme", "auto")) + 1) % 3];
@@ -1253,6 +1296,8 @@
     $("#terminated-toggle").addEventListener("change", (e) => setFilter({ include_terminated: e.target.checked }));
     $("#clear-filters").addEventListener("click", clearFilters);
     $("#refresh-btn").addEventListener("click", refreshNow);
+    $("#pause-btn").addEventListener("click", togglePause);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     $("#theme-btn").addEventListener("click", cycleTheme);
     $("#errors-btn").addEventListener("click", () => {
       if (S.filters.view === "cost") setFilter({ view: "" }); // read issues live on the Resources tab
@@ -1276,8 +1321,7 @@
     try { await loadMeta(); } catch (err) { handleError(err); }
     renderView();
     await loadHealth();
-    setInterval(loadHealth, 5000);
-    setInterval(renderStatus, 1000); // countdown + "x ago"
+    if (!document.hidden) startPolling();
   }
 
   document.addEventListener("DOMContentLoaded", init);
