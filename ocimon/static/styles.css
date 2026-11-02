@@ -379,3 +379,13 @@ svg.spark { vertical-align: middle; }
   .tiles { grid-template-columns: repeat(2, 1fr); }
   .tile-value { font-size: 20px; }
 }
+
+/* --- health signals & alerts ------------------------------------------- */
+.pct { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.mini-meter { display: inline-block; width: 36px; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.mini-meter > span { display: block; height: 100%; border-radius: 3px; }
+ul.reasons { margin: 0 0 8px; padding-left: 18px; color: var(--warn); font-weight: 550; }
+.mono.clip { display: inline-block; max-width: 340px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.tile.tile-alert { border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); }
+.tile.tile-alert .tile-value { color: var(--bad); }
+.tab .problem-badge { margin: 0 0 0 4px; vertical-align: 1px; }

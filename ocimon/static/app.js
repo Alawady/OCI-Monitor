@@ -117,6 +117,7 @@
     loadedAt: null,         // last_refresh of the data on screen
     loading: true,
     filters: { compartment: "", region: "", type: "", category: "", state: "", q: "", problems: false, include_terminated: false, view: "", days: 7 },
+    alarms: [],             // alarm rows for the Alerts tab (current compartment/region/search)
     cost: null,             // /api/cost response for the current compartment/region/range
     costCurrency: null,     // set when resource rows carry cost
     costTable: false,       // chart shown as a table
@@ -135,7 +136,7 @@
     for (const k of ["compartment", "region", "type", "category", "state", "q"]) f[k] = p.get(k) || "";
     f.problems = p.get("problems") === "1";
     f.include_terminated = p.get("terminated") === "1";
-    f.view = p.get("view") === "cost" ? "cost" : "";
+    f.view = ["cost", "alerts"].includes(p.get("view")) ? p.get("view") : "";
     f.days = [7, 14, 30].includes(Number(p.get("days"))) ? Number(p.get("days")) : 7;
   }
   function writeHash() {
@@ -164,12 +165,14 @@
     const seq = ++loadSeq;
     try {
       // Cards and filter options ignore type/state/problem filters so they stay usable for navigation.
-      const [summary, tree, res] = await Promise.all([
+      const [summary, tree, res, alarms] = await Promise.all([
         api("summary", baseParams()),
         api("compartments", { region: S.filters.region, include_terminated: S.filters.include_terminated }),
         api("resources", fullParams()),
+        api("resources", { type: "alarm", compartment: S.filters.compartment, region: S.filters.region, q: S.filters.q }),
       ]);
       if (seq !== loadSeq) return; // a newer request superseded this one
+      S.alarms = alarms.items;
       S.summary = summary; S.tree = tree.tree; S.items = res.items; S.loadedAt = res.last_refresh;
       S.costCurrency = res.currency || null;
       S.loading = false;
@@ -212,7 +215,7 @@
     S.meta = await api("meta");
     $("#mode-badge").hidden = S.meta.mode !== "demo";
     $("#tenancy").textContent = S.meta.tenancy_name || "";
-    $("#tabs").hidden = !S.meta.cost_enabled;
+    $("#cost-tab").hidden = !S.meta.cost_enabled;
     renderRegions();
   }
 
@@ -485,8 +488,11 @@
     return bad.length ? `${bad.length}/${sets.length} unhealthy` : `${sets.length} OK`;
   }
 
+  const HEALTH_COL = { key: "health", label: "Health", get: (r) => ({ CRITICAL: 3, WARNING: 2, OK: 1 }[r.health] || 0), render: healthCell };
+
   const COLUMNS = {
-    instance: [C.shape, num("ocpus", "OCPUs"), num("memory_gb", "Memory GB"), ipList("private_ips"), ipList("public_ips"), C.ad],
+    instance: [HEALTH_COL, C.shape, num("ocpus", "OCPUs"), num("memory_gb", "Memory GB"), pctCol("cpu_pct", "CPU"),
+      pctCol("memory_pct", "Mem used"), ipList("private_ips"), ipList("public_ips")],
     volume: [num("size_gb", "Size GB"), num("vpus_per_gb", "VPUs/GB"),
       { key: "attached", label: "Attached", get: det("attached"), render: (r) => attachedCell(r) }, C.ad],
     boot_volume: [num("size_gb", "Size GB"), num("vpus_per_gb", "VPUs/GB"),
@@ -499,10 +505,12 @@
       { key: "backend_sets", label: "Backend sets", get: backendSummary }],
     db_system: [C.version, C.shape, { key: "edition", label: "Edition", get: (r) => r.details.edition && humanize(r.details.edition.replace("_EDITION", "")) },
       num("cpu_cores", "Cores"), num("nodes", "Nodes"), num("storage_gb", "Storage GB")],
-    autonomous_database: [{ key: "workload", label: "Workload", get: det("workload") }, C.version,
+    autonomous_database: [HEALTH_COL, pctCol("storage_pct", "Storage used"), pctCol("cpu_pct", "CPU"),
+      { key: "workload", label: "Workload", get: det("workload") }, C.version,
       { key: "compute", label: "Compute", get: det("compute") }, num("storage_tb", "Storage TB"),
       { key: "free_tier", label: "Free tier", get: det("free_tier"), render: (r) => (r.details.free_tier ? "Yes" : "No") }],
-    mysql_db_system: [C.version, C.shape, { key: "heatwave", label: "HeatWave", get: det("heatwave") },
+    mysql_db_system: [HEALTH_COL, pctCol("storage_pct", "Storage used"), pctCol("cpu_pct", "CPU"), pctCol("memory_pct", "Mem used"),
+      C.version, C.shape, { key: "heatwave", label: "HeatWave", get: det("heatwave") },
       { key: "highly_available", label: "HA", get: det("highly_available"), render: (r) => (r.details.highly_available ? "Yes" : "No") },
       { key: "endpoint", label: "Endpoint", get: det("endpoint"), mono: true }],
     oke_cluster: [{ key: "kubernetes_version", label: "Kubernetes", get: det("kubernetes_version") },
@@ -527,6 +535,13 @@
       { key: "storage_tier", label: "Tier", get: det("storage_tier") }, { key: "versioning", label: "Versioning", get: det("versioning") }],
     functions_application: [num("functions", "Functions"), C.shape],
     api_gateway: [{ key: "endpoint_type", label: "Endpoint", get: det("endpoint_type") }, { key: "hostname", label: "Hostname", get: det("hostname"), mono: true }],
+    alarm: [
+      { key: "severity", label: "Severity", get: (r) => SEV_RANK[r.details.severity] || 0, render: (r) => severityPill(r.details.severity) },
+      { key: "triggered_at", label: "Last triggered", get: det("triggered_at"), render: triggeredCell },
+      { key: "namespace", label: "Metric namespace", get: det("namespace") },
+      { key: "query", label: "Query", get: det("query"), render: (r) => h("span", { class: "mono clip", title: r.details.query || null }, r.details.query || "—") },
+      num("notifications", "Notify"),
+    ],
   };
 
   function attachedCell(r) {
@@ -536,7 +551,35 @@
     const to = rel("instance")(r);
     return to ? `Yes · ${to}` : "Yes";
   }
-  function healthCell(r) { return r.health ? pill(r.health, r.health_class) : h("span", { class: "muted" }, "—"); }
+  function healthCell(r) {
+    if (!r.health) return h("span", { class: "muted" }, "—");
+    const reasons = (r.health_reasons || []).join("\n");
+    return h("span", { title: reasons || null }, pill(r.health, r.health_class));
+  }
+
+  // Utilization % with a small meter colored by the server's thresholds (see /api/meta).
+  function pctCell(v, key) {
+    if (v === undefined || v === null) return h("span", { class: "muted" }, "—");
+    const t = (S.meta && S.meta.thresholds && S.meta.thresholds[key]) || {};
+    const cls = t.crit != null && v >= t.crit ? "bad" : t.warn != null && v >= t.warn ? "warn" : "ok";
+    const bar = h("span", { class: "mini-meter" }, h("span", { class: `bg-${cls}` }));
+    bar.firstChild.style.width = `${Math.min(100, Math.max(0, v))}%`;
+    return h("span", { class: "pct" }, bar, `${v.toFixed(1)}%`);
+  }
+  function pctCol(key, label) {
+    return { key, label, num: true, get: (r) => (r.metrics ? r.metrics[key] : undefined), render: (r) => pctCell(r.metrics && r.metrics[key], key) };
+  }
+
+  const SEV_RANK = { CRITICAL: 4, ERROR: 3, WARNING: 2, INFO: 1 };
+  function severityPill(sev) {
+    return sev ? pill(sev, { CRITICAL: "bad", ERROR: "bad", WARNING: "warn" }[sev] || "unknown") : "—";
+  }
+  function triggeredCell(r) {
+    const iso = r.details.triggered_at;
+    if (!iso) return h("span", { class: "muted" }, "never");
+    const ago = fmtAgo(Date.parse(iso) / 1000);
+    return h("span", { title: new Date(iso).toLocaleString() }, r.state === "FIRING" ? `firing since ${ago.replace(" ago", "")}` : ago);
+  }
 
   const SEVERITY = { bad: 4, warn: 3, stopped: 2, unknown: 1, ok: 0 };
   function columnsFor(type, multiRegion) {
@@ -572,16 +615,17 @@
     });
   }
 
-  function setSort(type, key) {
+  function setSort(type, key, rerender = renderContent) {
     const cur = S.sort[type];
     S.sort[type] = cur && cur.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" };
     store.set("sort", S.sort);
-    renderContent();
+    rerender();
   }
 
   const ROW_LIMIT = 200;
 
-  function renderTable(type, items, multiRegion) {
+  // rerender: the view that owns the table (Resources or Alerts), called after sort/expand.
+  function renderTable(type, items, multiRegion, rerender = renderContent) {
     const cols = columnsFor(type, multiRegion);
     const sorted = sortItems(items, cols, type);
     const limited = S.showAll.has(type) ? sorted : sorted.slice(0, ROW_LIMIT);
@@ -589,8 +633,8 @@
     const thead = h("thead", {}, h("tr", {}, cols.map((c) => h("th", {
       class: `sortable ${c.num ? "num" : ""}`, scope: "col", tabindex: "0", title: c.title || null,
       "aria-sort": s && s.key === c.key ? (s.dir === "asc" ? "ascending" : "descending") : "none",
-      onclick: () => setSort(type, c.key),
-      onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSort(type, c.key); } },
+      onclick: () => setSort(type, c.key, rerender),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSort(type, c.key, rerender); } },
     }, c.label, h("span", { class: "arrow" }, s && s.key === c.key ? (s.dir === "asc" ? "▲" : "▼") : "")))));
 
     const tbody = h("tbody");
@@ -599,8 +643,8 @@
       const tr = h("tr", {
         class: `res-row ${r.problem ? "problem-" + r.problem : ""} ${r.state === "TERMINATED" || r.state === "DELETED" ? "terminated" : ""} ${open ? "expanded" : ""}`,
         tabindex: "0", "aria-expanded": String(open),
-        onclick: (e) => { if (!e.target.closest("a,button")) toggleRow(r.id); },
-        onkeydown: (e) => { if (e.key === "Enter") toggleRow(r.id); },
+        onclick: (e) => { if (!e.target.closest("a,button")) toggleRow(r.id, rerender); },
+        onkeydown: (e) => { if (e.key === "Enter") toggleRow(r.id, rerender); },
       }, cols.map((c) => {
         const v = c.render ? c.render(r) : (c.fmt ? c.fmt(c.get(r)) : c.num ? fmtNum(c.get(r)) : fmtValue(c.get(r)));
         return h("td", { class: [c.cls, c.num && "num", c.mono && "mono"].filter(Boolean).join(" ") || null, title: c.key === "name" ? r.name : null }, v);
@@ -610,15 +654,15 @@
     }
     if (sorted.length > limited.length) {
       tbody.append(h("tr", { class: "more-row" }, h("td", { colspan: cols.length },
-        h("button", { class: "link-btn", type: "button", onclick: () => { S.showAll.add(type); renderContent(); } },
+        h("button", { class: "link-btn", type: "button", onclick: () => { S.showAll.add(type); rerender(); } },
           `Show all ${sorted.length} (${sorted.length - limited.length} more)`))));
     }
     return h("div", { class: "table-wrap" }, h("table", {}, thead, tbody));
   }
 
-  function toggleRow(id) {
+  function toggleRow(id, rerender = renderContent) {
     if (S.expanded.has(id)) S.expanded.delete(id); else S.expanded.add(id);
-    renderContent();
+    rerender();
   }
 
   const DETAIL_SKIP = new Set(["backend_sets", "note"]);
@@ -642,6 +686,16 @@
           h("button", { class: "link-btn small mono", type: "button", title: "Copy OCID", onclick: () => copy(x.id) }, x.id.slice(0, 28) + "…"))))));
 
     const right = h("div", {});
+    const metricKeys = Object.keys(r.metrics || {});
+    if (metricKeys.length || (r.health_reasons || []).length) {
+      const label = { cpu_pct: "CPU", memory_pct: "Memory used", storage_pct: "Storage used", fs_status: "Filesystem" };
+      // DOM append() would print a literal "null", so add the optional list separately.
+      right.append(h("h4", {}, "Health signals · last 5 min"));
+      if ((r.health_reasons || []).length) right.append(h("ul", { class: "reasons" }, r.health_reasons.map((x) => h("li", {}, x))));
+      right.append(
+        h("dl", { class: "kv" }, metricKeys.map((k) => kv(label[k] || humanize(k),
+          k === "fs_status" ? (r.metrics[k] > 0 ? pill("PROBLEM", "bad") : pill("OK", "ok")) : pctCell(r.metrics[k], k)))));
+    }
     if (r.cost) {
       right.append(h("h4", {}, "Cost · last 7 days"), h("div", { class: "cost-detail" },
         sparkline(r.cost.daily, 160, 36, "Daily cost, last 7 full days"),
@@ -656,7 +710,7 @@
     const extra = Object.entries(r.details).filter(([k]) => !DETAIL_SKIP.has(k));
     if (extra.length) {
       right.append(h("h4", {}, "Details"), h("dl", { class: "kv" }, extra.map(([k, v]) =>
-        kv(humanize(k), k === "size_bytes" ? fmtBytes(v) : fmtValue(v)))));
+        kv(humanize(k), k === "size_bytes" ? fmtBytes(v) : k === "triggered_at" && v ? fmtDate(v) : fmtValue(v)))));
     }
     return h("div", { class: "detail" }, left, right);
   }
@@ -739,6 +793,76 @@
     renderContent();
   }
 
+  // ---------------------------------------------------------------- alerts
+  function renderAlertsBadge() {
+    const firing = S.alarms.filter((a) => a.state === "FIRING").length;
+    const badge = $("#alerts-badge");
+    badge.hidden = firing === 0;
+    badge.textContent = firing;
+    badge.title = `${firing} alarm${firing === 1 ? "" : "s"} firing`;
+  }
+
+  function renderAlerts() {
+    const el = $("#alerts-view");
+    if (el.hidden) return;
+    const hl = S.health;
+    const head = h("div", { class: "cost-head" }, h("div", { class: "scope" }, h("span", { class: "muted small" }, "Alerts for"),
+      h("span", { class: "scope-name", title: S.tree ? scopeLabel() : "" }, S.tree ? scopeLabel() : ""),
+      S.filters.region ? h("span", { class: "tag" }, S.filters.region) : null));
+    if (S.loading || !hl || !hl.last_refresh) {
+      el.replaceChildren(head, h("div", { class: "state-box" }, h("div", { class: "spinner" }), h("h3", {}, "Collecting alarms…")));
+      return;
+    }
+    const all = S.alarms;
+    if (!all.length) {
+      el.replaceChildren(head, h("div", { class: "state-box" },
+        h("h3", {}, S.filters.q ? "No alarms match the search" : "No alarms here"),
+        h("p", {}, "Alarms are defined in OCI Monitoring; the ones you can read appear here with their current status.")));
+      return;
+    }
+    const dayAgo = Date.now() - 864e5;
+    const firing = all.filter((a) => a.state === "FIRING")
+      .sort((a, b) => (SEV_RANK[b.details.severity] || 0) - (SEV_RANK[a.details.severity] || 0) || a.name.localeCompare(b.name));
+    const recent = all.filter((a) => a.state !== "FIRING" && a.details.triggered_at && Date.parse(a.details.triggered_at) >= dayAgo);
+    const rest = all.filter((a) => a.state !== "FIRING" && !recent.includes(a));
+    const count = (st) => all.filter((a) => a.state === st).length;
+    const crit = firing.filter((a) => a.problem === "critical").length;
+
+    const tile = (label, value, sub, cls) => h("div", { class: `tile ${cls || ""}` },
+      h("div", { class: "tile-label" }, label), h("div", { class: "tile-value" }, value), sub ? h("div", { class: "tile-sub" }, sub) : null);
+    const tiles = h("div", { class: "tiles" },
+      tile("Firing now", firing.length, firing.length
+        ? [h("span", {}, h("span", { class: "dot bg-bad" }), h("b", {}, crit), " critical  "),
+          h("span", {}, h("span", { class: "dot bg-warn" }), h("b", {}, firing.length - crit), " warning/info")]
+        : h("span", { class: "muted" }, "all clear"), firing.length ? "tile-alert" : ""),
+      tile("Triggered in last 24 h", recent.length, h("span", { class: "muted" }, "now back to OK")),
+      tile("Suppressed", count("SUPPRESSED"), h("span", { class: "muted" }, "notifications paused")),
+      tile("Disabled", count("DISABLED"), null),
+      tile("Total alarms", all.length, null));
+
+    const multiRegion = !S.filters.region && ((S.meta && S.meta.regions.length) || 0) > 1;
+    const section = (key, title, items, emptyText, closedByDefault) => {
+      const collapsed = closedByDefault ? !S.collapsedSections.has(`${key}:open`) : S.collapsedSections.has(key);
+      const toggle = () => {
+        const k = closedByDefault ? `${key}:open` : key;
+        if (S.collapsedSections.has(k)) S.collapsedSections.delete(k); else S.collapsedSections.add(k);
+        store.set("collapsedSections", [...S.collapsedSections]);
+        renderAlerts();
+      };
+      return h("section", { class: `section ${collapsed ? "collapsed" : ""}` },
+        h("div", { class: "section-head" },
+          h("button", { class: "section-toggle", type: "button", "aria-expanded": String(!collapsed), onclick: toggle },
+            icon("m6 9 6 6 6-6"), h("h2", {}, title)),
+          h("span", { class: "count" }, items.length)),
+        h("div", { class: "section-body" }, items.length ? renderTable("alarm", items, multiRegion, renderAlerts)
+          : h("p", { class: "muted" }, emptyText)));
+    };
+    el.replaceChildren(head, tiles,
+      section("alerts-firing", "Firing now", firing, "No alarms are firing. 🎉"),
+      section("alerts-recent", "Triggered in the last 24 hours", recent, "Nothing triggered in the last 24 hours."),
+      section("alerts-other", "All other alarms", rest, "None.", true));
+  }
+
   // ------------------------------------------------------------------ cost
   function money(v, compact) {
     const cur = (S.cost && S.cost.currency) || S.costCurrency || "";
@@ -793,20 +917,29 @@
     }
   }
 
+  function currentView() {
+    if (S.filters.view === "cost") return S.meta && S.meta.cost_enabled ? "cost" : "resources";
+    return S.filters.view === "alerts" ? "alerts" : "resources";
+  }
+
   function renderView() {
-    const cost = S.filters.view === "cost" && !!S.meta && S.meta.cost_enabled;
-    $("#resources-view").hidden = cost;
-    $("#cost-view").hidden = !cost;
+    const view = currentView();
+    $("#resources-view").hidden = view !== "resources";
+    $("#alerts-view").hidden = view !== "alerts";
+    $("#cost-view").hidden = view !== "cost";
     for (const t of document.querySelectorAll(".tab")) {
-      const on = (t.dataset.view === "cost") === cost;
+      const on = t.dataset.view === view;
       t.classList.toggle("active", on);
       t.setAttribute("aria-selected", String(on));
     }
     const search = $("#search");
-    search.disabled = cost;
-    search.placeholder = cost ? "Search applies to the Resources tab" : "Search name, OCID, IP, shape…";
+    search.disabled = view === "cost";
+    search.placeholder = view === "cost" ? "Search applies to Resources and Alerts"
+      : view === "alerts" ? "Search alarm name, metric, query…" : "Search name, OCID, IP, shape…";
     renderStatus();
-    if (cost) renderCost();
+    renderAlertsBadge();
+    if (view === "cost") renderCost();
+    if (view === "alerts") renderAlerts();
   }
 
   function scopeLabel() {
@@ -1131,7 +1264,7 @@
     $("#scrim").addEventListener("click", closeNav);
     window.addEventListener("hashchange", () => { readHash(); renderFilters(); renderView(); loadData(); loadCost(); });
     for (const tab of document.querySelectorAll(".tab")) {
-      tab.addEventListener("click", () => setFilter({ view: tab.dataset.view === "cost" ? "cost" : "" }));
+      tab.addEventListener("click", () => setFilter({ view: tab.dataset.view === "resources" ? "" : tab.dataset.view }));
     }
   }
 

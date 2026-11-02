@@ -1,9 +1,9 @@
 # OCI-Monitor
 
-A read-only Oracle Cloud Infrastructure (OCI) monitoring dashboard. Start it from a terminal and it shows the live status of your OCI resources in the browser, grouped by compartment, plus a **Cost** tab with daily spend.
+A read-only Oracle Cloud Infrastructure (OCI) monitoring dashboard. Start it from a terminal and it shows the live status of your OCI resources in the browser, grouped by compartment. It also has an **Alerts** tab for your OCI alarms and a **Cost** tab with daily spend.
 
 - Reuses your existing OCI CLI configuration (`~/.oci/config`). No new credentials are needed.
-- **Strictly read-only**: it only calls `list_*`, `get_*`, Resource Search and the Usage API cost query. A unit test fails the build if a mutating SDK call ever appears in the code.
+- **Strictly read-only**: it only calls `list_*`, `get_*`, Resource Search, and the Usage API and Monitoring queries. A unit test fails the build if a mutating SDK call ever appears in the code.
 - A single page with no build step and no CDN, so it works offline.
 
 ## Quick start
@@ -43,10 +43,10 @@ To try the UI without OCI access, use `./run.sh --demo`. It serves a realistic f
 
 | Category | Resources | Status details |
 |---|---|---|
-| Compute | Instances | state, shape, OCPUs/memory, AD, fault domain, private/public IPs |
+| Compute | Instances | state, shape, OCPUs/memory, AD, fault domain, private/public IPs; **CPU %, memory used %, filesystem health** |
 | Block Storage | Block volumes, boot volumes | state, size, VPUs, attached instance |
 | Load Balancing | Load balancers, network load balancers | state, overall health and per-backend-set health (OK/WARNING/CRITICAL/UNKNOWN) |
-| Databases | DB systems (VM/BM), Autonomous Databases, MySQL HeatWave | state, version, workload type, HeatWave cluster, HA |
+| Databases | DB systems (VM/BM), Autonomous Databases, MySQL HeatWave | state, version, workload type, HeatWave cluster, HA; **storage used %, CPU %, memory %** (MySQL, Autonomous) |
 | Kubernetes | OKE clusters, node pools | state, Kubernetes version, node health (failed nodes → CRITICAL) |
 | Networking | VCNs, subnets, internet/NAT/service gateways, DRGs, LPGs | summary |
 | Object Storage | Buckets | public/private, approx. object count and size, tier |
@@ -90,6 +90,33 @@ A resource counts as a **problem** if any of these is true:
 - its state is FAILED;
 - its health is CRITICAL or WARNING;
 - it needs attention (for example `AVAILABLE_NEEDS_ATTENTION` or `UNAVAILABLE`).
+
+### Health signals from metrics
+
+Instances and managed databases get a **Health** column from OCI Monitoring metrics. Each one is the latest 5-minute value; hover the health pill to see why.
+
+| Signal | Warning | Critical | Source (no setup needed) |
+|---|---|---|---|
+| Memory used | ≥ 90% | ≥ 97% | Oracle Cloud Agent (`oci_computeagent`), MySQL, Autonomous DB |
+| Storage used (databases) | ≥ 80% | ≥ 90% | `oci_mysql_database`, `oci_autonomous_database` |
+| CPU | ≥ 90% | — | Oracle Cloud Agent, MySQL, Autonomous DB |
+| Filesystem health | — | problem reported | `oci_compute_instance_health` |
+
+The thresholds are in `ocimon/metrics.py`.
+
+- **No disk free space for instances.** OCI only sees block and boot volumes from outside (I/O), so free space inside an instance needs an in-guest reporter. That isn't included yet.
+- **Agent required.** Instances without the Oracle Cloud Agent's monitoring plugin, and stopped instances, show "—".
+- **Cost.** Metrics are read with one query per metric and region, so it adds about a second to each refresh.
+
+### Alerts tab
+
+The Alerts tab lists your OCI Monitoring **alarms** with their current status. It follows the compartment, region and search filters. The tab shows how many alarms are firing.
+
+- **Firing now:** sorted by severity, showing how long each alarm has been firing.
+- **Triggered in the last 24 hours:** alarms that fired recently and are back to OK.
+- **All other alarms:** OK, suppressed and disabled alarms, collapsed by default.
+
+Click an alarm to see its query, summary and notification count, plus a link to it in the OCI Console. The dashboard only reads alarms. It never acknowledges, suppresses or changes them.
 
 TERMINATED and DELETED resources show red but never count as problems, because they are usually intentional.
 
@@ -150,6 +177,8 @@ Allow group OCIMonitorReaders to read buckets in tenancy
 Allow group OCIMonitorReaders to read functions-family in tenancy
 Allow group OCIMonitorReaders to read api-gateway-family in tenancy
 Allow group OCIMonitorReaders to read usage-reports in tenancy
+Allow group OCIMonitorReaders to read metrics in tenancy
+Allow group OCIMonitorReaders to read alarms in tenancy
 ```
 
 Notes:

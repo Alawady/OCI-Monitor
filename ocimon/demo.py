@@ -9,6 +9,7 @@ import string
 import time
 from datetime import datetime, timedelta, timezone
 
+from . import metrics as metric_signals
 from .models import Compartment, ErrorRecord, Resource
 from .snapshot import Snapshot
 
@@ -226,6 +227,45 @@ def build_demo(tick: int = 0) -> Snapshot:
     # A bucket we could see in Search but not read in detail.
     b.add("bucket", "bucket", "security-audit-logs", JED, security, "ACTIVE", source="search",
           details={"note": "Details unavailable; listed from Resource Search"})
+
+    # Monitoring signals, as the metrics phase would attach them.
+    hot = {"prod-app-02": {"memory_pct": 94.2}, "orders-mysql": {"storage_pct": 88.4}}
+    for r in b.resources:
+        if r.type == "instance" and r.state == "RUNNING":
+            metric_signals.apply(r, hot.get(r.name, {
+                "cpu_pct": round(b.rng.uniform(3, 65), 1), "memory_pct": round(b.rng.uniform(20, 80), 1), "fs_status": 0}))
+        elif r.type == "mysql_db_system" and r.state == "ACTIVE":
+            metric_signals.apply(r, {"cpu_pct": round(b.rng.uniform(5, 40), 1), "memory_pct": round(b.rng.uniform(40, 75), 1),
+                                     "storage_pct": round(b.rng.uniform(10, 60), 1), **hot.get(r.name, {})})
+
+    # Alarms (shown on the Alerts tab).
+    def alarm(name: str, region: str, comp: str, state: str, severity: str, namespace: str, query: str,
+              hours_ago: float | None, summary: str = "") -> None:
+        health = {"CRITICAL": "CRITICAL", "ERROR": "CRITICAL", "WARNING": "WARNING"}.get(severity) if state == "FIRING" else None
+        b.add("alarm", "alarm", name, region, comp, state, health=health, details={
+            "severity": severity,
+            "triggered_at": (b.now - timedelta(hours=hours_ago)).isoformat() if hours_ago is not None else None,
+            "namespace": namespace, "query": query,
+            "summary": summary or f'Alarm "{name}" is in a "{state}" state.',
+            "notifications": 1, "enabled": state != "DISABLED"})
+
+    alarm("prod-app-02 memory > 90%", JED, prod_app, "FIRING", "WARNING", "oci_computeagent",
+          "MemoryUtilization[5m]{resourceDisplayName = \"prod-app-02\"}.mean() > 90", 3.5,
+          'Alarm "prod-app-02 memory > 90%" is in a "FIRING" state; because 1 metrics meet the trigger rule.')
+    alarm("stg-lb unhealthy backends", JED, staging, "FIRING", "CRITICAL", "oci_lbaas",
+          "UnHealthyBackendServers[1m].max() > 0", 26)
+    alarm("orders-mysql-replica down", RUH, prod_data, "FIRING", "CRITICAL", "oci_mysql_database",
+          "CPUUtilization[1m].absent()", 50)
+    alarm("prod-web 5xx rate", JED, prod_app, "OK", "WARNING", "oci_lbaas", "HttpResponses5xx[1m].sum() > 20", 5)
+    alarm("orders-mysql storage > 85%", JED, prod_data, "OK", "WARNING", "oci_mysql_database",
+          "DbVolumeUtilization[5m].max() > 85", 20)
+    alarm("bastion CPU > 90%", JED, shared, "OK", "WARNING", "oci_computeagent", "CpuUtilization[5m].mean() > 90", 240)
+    alarm("ci-runner disk IO", PHX, dev, "SUPPRESSED", "INFO", "oci_computeagent", "DiskIopsWritten[5m].mean() > 5000", 72)
+    alarm("legacy batch check", JED, prod_app, "DISABLED", "WARNING", "oci_computeagent",
+          "CpuUtilization[5m].mean() > 95", None)
+    for name in ("prod-web-01", "prod-web-02", "prod-web-03"):
+        alarm(f"{name} memory > 90%", JED, prod_app, "OK", "WARNING", "oci_computeagent",
+              f"MemoryUtilization[5m]{{resourceDisplayName = \"{name}\"}}.mean() > 90", None)
 
     errors = [
         ErrorRecord(JED, "Compute", "ListInstances", "Authorization failed or requested resource not found "

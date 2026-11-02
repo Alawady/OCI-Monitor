@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 import oci
 
+from . import metrics as metric_signals
 from .auth import Auth
 from .collectors import all_collectors
 from .collectors.base import Collector, RegionContext, error_from_exception, list_all
@@ -48,7 +50,8 @@ class Collection:
     def __init__(self, auth: Auth, regions: list[str], root_id: str | None = None, *,
                  workers: int = 16, collectors: list[Collector] | None = None,
                  client_factory: ClientFactory | None = None,
-                 shutdown_event: threading.Event | None = None) -> None:
+                 shutdown_event: threading.Event | None = None,
+                 metric_specs: list[metric_signals.MetricSpec] | None = None) -> None:
         self.auth = auth
         self._shutdown_event = shutdown_event
         self.tenancy_id = auth.tenancy_id
@@ -56,6 +59,7 @@ class Collection:
         self.regions = regions
         self.workers = max(2, workers)
         self.collectors = collectors if collectors is not None else all_collectors()
+        self.metric_specs = metric_signals.SPECS if metric_specs is None else metric_specs
         self._client_factory = client_factory or (
             lambda cls, region: auth.make_client(cls, region, retry_strategy=RETRY_STRATEGY,
                                                  timeout=CLIENT_TIMEOUT))
@@ -209,6 +213,33 @@ class Collection:
                 self._record(exc, region, collector.label, "collect")
         return resources, time.monotonic() - start
 
+    def _enrich_metrics(self, resources: list[Resource]) -> None:
+        """Attach the latest Monitoring values (CPU, memory, storage...) and their health."""
+        by_region: dict[str, list[Resource]] = defaultdict(list)
+        for r in resources:
+            by_region[r.region].append(r)
+        jobs = []
+        for region, items in by_region.items():
+            client = lambda region=region: self.client(oci.monitoring.MonitoringClient, region)  # noqa: E731
+            for spec, comp, fn in metric_signals.query_tasks(items, self.root_id, self.tenancy_id, client,
+                                                             self.metric_specs):
+                jobs.append((region, spec, comp, self.io_pool.submit(fn)))
+        values: dict[str, dict[str, float]] = defaultdict(dict)
+        for region, spec, comp, future in jobs:
+            try:
+                found = future.result()
+            except Exception as exc:
+                if not self.stopping():
+                    self._record(exc, region, "Monitoring", f"SummarizeMetricsData:{spec.namespace}",
+                                 None if comp == self.root_id else comp)
+                continue
+            for rid, value in found.items():
+                values[rid][spec.key] = round(value, 1)
+        for r in resources:
+            found = values.get(r.id.lower())
+            if found:
+                metric_signals.apply(r, found)
+
     def _search_fallbacks(self, seen: set[str]) -> list[Resource]:
         """Rows for resources Search found but enrichment couldn't read."""
         by_search_type = {t.search_type: t for c in self.collectors for t in c.types if t.search_type}
@@ -255,6 +286,8 @@ class Collection:
                 timings[collector.key] = round(timings.get(collector.key, 0.0) + seconds, 2)
                 for r in found:
                     resources.setdefault(r.id, r)
+            if not self.stopping():
+                self._enrich_metrics(list(resources.values()))
 
         if self.stopping():
             raise RefreshCancelled()

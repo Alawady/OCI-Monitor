@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..models import ResourceType
 from . import (  # noqa: F401  (imported for @register side effects)
+    alarms,
     api_gateway,
     block_storage,
     compute,

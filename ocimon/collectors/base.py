@@ -78,6 +78,10 @@ class RegionContext:
         return self._run.tenancy_id
 
     @property
+    def root_id(self) -> str:
+        return self._run.root_id
+
+    @property
     def compartments(self) -> dict[str, Compartment]:
         return self._run.compartments
 

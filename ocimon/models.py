@@ -48,14 +48,14 @@ class ResourceType:
 OK_STATES = {
     "RUNNING", "AVAILABLE", "ACTIVE", "OK", "ATTACHED", "SUCCEEDED", "ENABLED",
 }
-STOPPED_STATES = {"STOPPED", "INACTIVE", "DISABLED", "DETACHED", "SUSPENDED"}
+STOPPED_STATES = {"STOPPED", "INACTIVE", "DISABLED", "DETACHED", "SUSPENDED", "SUPPRESSED"}
 BAD_STATES = {"FAILED", "TERMINATED", "CRITICAL", "DELETED", "ERROR"}
 WARN_STATES = {
     "PROVISIONING", "STARTING", "STOPPING", "UPDATING", "WARNING", "CREATING",
     "RESTORING", "SCALING", "TERMINATING", "DELETING", "MOVING", "UPGRADING",
     "MAINTENANCE_IN_PROGRESS", "BACKUP_IN_PROGRESS", "ROLE_CHANGE_IN_PROGRESS",
     "AVAILABLE_NEEDS_ATTENTION", "NEEDS_ATTENTION", "UNAVAILABLE", "INACCESSIBLE",
-    "DEGRADED", "PENDING", "RESTARTING", "STANDBY",
+    "DEGRADED", "PENDING", "RESTARTING", "STANDBY", "FIRING",
 }
 # Amber states that should still count as a problem, not just "in progress".
 ATTENTION_STATES = {
@@ -110,6 +110,9 @@ class Resource:
     # values the console URL template needs. Resolved to names by the API.
     refs: dict[str, Any] = field(default_factory=dict)
     source: str = "api"  # "api" (enriched) or "search" (fallback from Resource Search)
+    # Latest OCI Monitoring values, e.g. {"cpu_pct": 12.5, "memory_pct": 93.6} (see metrics.py)
+    metrics: dict[str, float] = field(default_factory=dict)
+    health_reasons: list[str] = field(default_factory=list)  # why health is WARNING/CRITICAL
 
     def __post_init__(self) -> None:
         self.state = normalize_state(self.state)

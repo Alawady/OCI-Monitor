@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .collectors import resource_types
 from .cost import cost_view
+from .metrics import THRESHOLDS
 from .filters import ResourceQuery, compartment_tree, filter_resources, resource_view, summarize
 from .models import CATEGORIES, isoformat
 from .refresher import Refresher
@@ -177,6 +178,7 @@ def create_app(settings: Settings, refresher: Refresher,
             "regions": s.regions if s else [],
             "tenancy_name": s.tenancy_name if s else None,
             "cost_enabled": cost_refresher is not None,
+            "thresholds": {k: {"label": t.label, "warn": t.warn, "crit": t.crit} for k, t in THRESHOLDS.items()},
             "categories": [c.__dict__ for c in CATEGORIES],
             "types": [{"key": t.key, "label": t.label, "category": t.category} for t in resource_types().values()],
         }

@@ -69,8 +69,12 @@ def filter_resources(snapshot: Snapshot, query: ResourceQuery) -> list[Resource]
     if query.compartment:
         allowed_comps = snapshot.descendants(query.compartment) if query.subtree else {query.compartment}
     tokens = query.q.split()
+    # Alarms live on the Alerts tab; they only appear when asked for explicitly.
+    want_alarms = "alarm" in query.types or "alarms" in query.categories
     out = []
     for r in snapshot.resources:
+        if r.type == "alarm" and not want_alarms:
+            continue
         if r.terminated and not query.include_terminated and r.state not in query.states:
             continue
         if allowed_comps is not None and r.compartment_id not in allowed_comps:
@@ -104,7 +108,7 @@ def resource_view(snapshot: Snapshot, r: Resource, cost: "CostReport | None" = N
         related.append({
             "rel": key[:-3],
             "id": value,
-            "name": other.name if other else None,
+            "name": other.name if other else snapshot.paths.get(value),  # compartments aren't resources
             "type": other.type if other else None,
         })
     return {
@@ -129,6 +133,8 @@ def resource_view(snapshot: Snapshot, r: Resource, cost: "CostReport | None" = N
         "console_url": console_url(r, rtype),
         "source": r.source,
         "cost": cost.for_resource(r.id) if cost else None,
+        "metrics": r.metrics,
+        "health_reasons": r.health_reasons,
     }
 
 

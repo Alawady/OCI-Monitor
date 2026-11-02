@@ -27,7 +27,7 @@ def client():
 
 def test_summary(client):
     d = client.get("/api/summary").json()
-    assert d["totals"]["problems"] == 5
+    assert d["totals"]["problems"] == 7
     assert {c["label"] for c in d["cards"]} >= {"Instances", "Databases", "Load Balancers", "Volumes", "OKE"}
     assert d["last_refresh"]
 
@@ -57,7 +57,7 @@ def test_resources_related_resolved(client):
 def test_compartments_tree(client):
     d = client.get("/api/compartments").json()
     tree = d["tree"]
-    assert tree["id"] == d["root_id"] and tree["total_problems"] == 5
+    assert tree["id"] == d["root_id"] and tree["total_problems"] == 7
     names = {c["name"] for c in tree["children"]}
     assert {"Production", "Staging", "Development", "SharedServices", "Security"} <= names
     # Counts follow the region filter

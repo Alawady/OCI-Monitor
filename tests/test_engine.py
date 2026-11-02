@@ -30,9 +30,9 @@ def instance(id_, comp):
               shape_config=None, availability_domain=None, fault_domain=None, time_created=None)
 
 
-def make(clients, collectors, regions=("me-jeddah-1",), root=None):
+def make(clients, collectors, regions=("me-jeddah-1",), root=None, metric_specs=()):
     return Collection(FakeAuth(), list(regions), root, workers=4, collectors=collectors,
-                      client_factory=lambda cls, region: clients[cls])
+                      client_factory=lambda cls, region: clients[cls], metric_specs=metric_specs)
 
 
 def test_full_run_with_search_fallback_and_errors():
@@ -160,7 +160,7 @@ def test_stop_cancels_run_quietly(caplog):
         oci.core.VirtualNetworkClient: FakeClient(get_vnic=lambda v: None),
     }
     run = Collection(FakeAuth(), ["me-jeddah-1"], workers=4, collectors=[ComputeCollector()],
-                     client_factory=lambda cls, region: clients[cls], shutdown_event=stop)
+                     client_factory=lambda cls, region: clients[cls], shutdown_event=stop, metric_specs=[])
     with pytest.raises(RefreshCancelled):
         run.run()
     assert run._errors == {}

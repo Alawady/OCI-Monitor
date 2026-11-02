@@ -66,17 +66,18 @@ def test_search_matches_name_ip_and_compartment(snap):
 
 def test_problems_only(snap):
     problems = filter_resources(snap, q(problems=True))
-    assert {r.name for r in problems} == {"prod-public-lb", "stg-lb", "prodatp", "orders-mysql-replica", "dev-oke"}
+    assert {r.name for r in problems} == {"prod-public-lb", "stg-lb", "prodatp", "orders-mysql-replica", "dev-oke",
+                                          "prod-app-02", "orders-mysql"}  # last two: memory / storage metrics
 
 
 def test_summary_counts(snap):
     s = summarize(filter_resources(snap, q()))
-    assert s["totals"]["problems"] == 5
-    assert s["totals"]["critical"] == 3 and s["totals"]["warning"] == 2
+    assert s["totals"]["problems"] == 7
+    assert s["totals"]["critical"] == 3 and s["totals"]["warning"] == 4
     cards = {c["category"]: c for c in s["cards"]}
     inst = s["types"]["instance"]
     assert cards["compute"]["total"] == inst["total"]
-    assert inst["by_state"]["RUNNING"] == inst["by_status"]["ok"]
+    assert inst["by_state"]["RUNNING"] == inst["by_status"]["ok"] + 1  # prod-app-02 runs but has a memory warning
     assert sum(cards["compute"]["by_status"].values()) == cards["compute"]["total"]
     assert cards["load_balancing"]["problems"] == 2
 
@@ -87,6 +88,7 @@ def test_tree_counts_roll_up(snap):
     assert tree["total"] == len(filter_resources(snap, q()))
     prod = next(c for c in tree["children"] if c["name"] == "Production")
     assert prod["total"] == sum(ch["total"] for ch in prod["children"]) + prod["count"]
-    assert prod["total_problems"] == 3  # LB warning + ATP attention + failed MySQL replica
+    # LB warning, ATP attention, failed MySQL replica, prod-app-02 memory, orders-mysql storage
+    assert prod["total_problems"] == 5
     staging = next(c for c in tree["children"] if c["name"] == "Staging")
     assert staging["problems"] == 1

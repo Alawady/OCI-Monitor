@@ -55,11 +55,13 @@
     <main id="main" class="main">
       <div id="banner" class="banner" role="alert" hidden></div>
 
-      <nav id="tabs" class="tabs" role="tablist" aria-label="View" hidden>
+      <nav id="tabs" class="tabs" role="tablist" aria-label="View">
         <button class="tab active" type="button" role="tab" data-view="resources" aria-selected="true" aria-controls="resources-view">Resources</button>
-        <button class="tab" type="button" role="tab" data-view="cost" aria-selected="false" aria-controls="cost-view">Cost</button>
+        <button class="tab" type="button" role="tab" data-view="alerts" aria-selected="false" aria-controls="alerts-view">Alerts <span id="alerts-badge" class="problem-badge" hidden></span></button>
+        <button id="cost-tab" class="tab" type="button" role="tab" data-view="cost" aria-selected="false" aria-controls="cost-view" hidden>Cost</button>
       </nav>
 
+      <section id="alerts-view" class="alerts-view" role="tabpanel" aria-label="Alerts" hidden></section>
       <section id="cost-view" class="cost-view" role="tabpanel" aria-label="Cost" hidden></section>
 
       <div id="resources-view" role="tabpanel" aria-label="Resources">

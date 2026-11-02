@@ -17,7 +17,10 @@ TENANCY = "ocid1.tenancy.oc1..root"
 REGION = "me-jeddah-1"
 READ_PREFIXES = ("list_", "get_", "search_")
 # Read-only queries whose SDK names don't follow the list_/get_ convention.
-READ_ONLY_CALLS = {"request_summarized_usages"}  # Usage API cost query (a POST, but read-only)
+READ_ONLY_CALLS = {
+    "request_summarized_usages",  # Usage API cost query (a POST, but read-only)
+    "summarize_metrics_data",  # Monitoring metric query (a POST, but read-only)
+}
 
 
 def ns(**kw: Any) -> SimpleNamespace:
