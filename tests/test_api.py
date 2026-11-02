@@ -94,6 +94,9 @@ def test_static_ui_and_security_headers(client):
     assert "default-src 'self'" in r.headers["content-security-policy"]
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/styles.css").status_code == 200
+    # Upgrades must reach browsers: versioned asset URLs and revalidation on every load.
+    assert 'static/app.js?v=' in r.text and 'static/styles.css?v=' in r.text
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
     assert client.get("/api/health").headers["cache-control"] == "no-store"
     # The page references only local assets
     assert "http" not in r.text.replace("http-equiv", "")

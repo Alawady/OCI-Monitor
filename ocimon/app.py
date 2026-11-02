@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -183,7 +183,12 @@ def create_app(settings: Settings, refresher: Refresher,
 
     @api.get("/", include_in_schema=False)
     def index():
-        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+        # Version the asset URLs by file time, so browsers that cached an older copy fetch the new one.
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        for asset in ("app.js", "styles.css"):
+            version = (STATIC_DIR / asset).stat().st_mtime_ns
+            html = html.replace(f'static/{asset}"', f'static/{asset}?v={version}"')
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     api.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -232,6 +237,9 @@ def create_app(settings: Settings, refresher: Refresher,
             response.headers.setdefault(k, v)
         if "/api/" in request.url.path:
             response.headers["Cache-Control"] = "no-store"
+        elif "/static/" in request.url.path:
+            # Revalidate every time (cheap 304 via ETag) so an upgrade never runs a stale script.
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
     return app
