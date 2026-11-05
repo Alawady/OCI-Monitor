@@ -183,3 +183,37 @@ class CacheCollector(Collector):
                     refs={"subnet_id": c.subnet_id},
                 ))
         return out
+
+
+@register
+class MysqlChannelCollector(Collector):
+    key = "mysql_channel"
+    label = "MySQL replication channels"
+    types = (
+        ResourceType("mysql_channel", "MySQL replication channels", "database", "MysqlChannel",
+                     "mysqlaas/channels/{id}"),
+    )
+
+    def collect(self, ctx: RegionContext) -> list[Resource]:
+        client = lambda: ctx.client(oci.mysql.ChannelsClient)  # noqa: E731
+        listed = ctx.per_compartment("ListMysqlChannels", ctx.compartments_with("MysqlChannel"),
+                                     lambda c: list_all(client().list_channels, compartment_id=c))
+        out = []
+        for items in listed.values():
+            for ch in items:
+                source, target = ch.source, ch.target
+                host = getattr(source, "hostname", None)
+                port = getattr(source, "port", None)
+                out.append(Resource(
+                    id=ch.id, name=ch.display_name, type="mysql_channel", region=ctx.region,
+                    compartment_id=ch.compartment_id, state=ch.lifecycle_state, time_created=ch.time_created,
+                    details={
+                        "source": f"{host}:{port}" if host and port else host,
+                        "enabled": bool(ch.is_enabled),
+                        # Why replication needs attention, when OCI says.
+                        "lifecycle_details": ch.lifecycle_details or None,
+                    },
+                    # The replica DB system this channel applies to (resolved to its name in the UI).
+                    refs={"db_system_id": getattr(target, "db_system_id", None)},
+                ))
+        return out

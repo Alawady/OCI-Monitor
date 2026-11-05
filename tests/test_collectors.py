@@ -1,6 +1,6 @@
 """Collectors against mocked SDK responses."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import oci
 
@@ -383,3 +383,75 @@ def test_postgresql_and_cache(make_ctx):
     ctx, _ = make_ctx(CacheCollector(), clients, search=search, compartments=[A])
     (c,) = CacheCollector().collect(ctx)
     assert c.details["version"] == "Redis 7.0" and c.details["nodes"] == 3 and c.details["mode"] == "Nonsharded"
+
+
+# --- disaster recovery, WAF, APM, streaming, MySQL channels -----------------------
+
+def test_disaster_recovery_groups_plans_and_runs(make_ctx):
+    from ocimon.collectors.disaster_recovery import DisasterRecoveryCollector
+    group = ns(id="pg1", display_name="prod-dr", compartment_id=A, lifecycle_state="ACTIVE", lifecycle_sub_state=None,
+               role="STANDBY", peer_region="me-jeddah-1", peer_id="pg0", life_cycle_details=None, time_created=NOW)
+    plans = [ns(id="sw", display_name="switchover", compartment_id=A, lifecycle_state="ACTIVE", lifecycle_sub_state=None,
+                type="SWITCHOVER", peer_region="me-jeddah-1", dr_protection_group_id="pg1", life_cycle_details=None,
+                time_created=NOW),
+             ns(id="drill", display_name="drill", compartment_id=A, lifecycle_state="ACTIVE",
+                lifecycle_sub_state="NEEDS_REFRESH", type="START_DRILL", peer_region="me-jeddah-1",
+                dr_protection_group_id="pg1", life_cycle_details=None, time_created=NOW)]
+    runs = [ns(plan_id="drill", plan_execution_type="START_DRILL", lifecycle_state="SUCCEEDED", time_created=NOW,
+               time_ended=NOW),
+            ns(plan_id="drill", plan_execution_type="START_DRILL", lifecycle_state="FAILED",
+               time_created=NOW + timedelta(days=1), time_ended=NOW + timedelta(days=1))]
+    client = FakeClient(list_dr_protection_groups=by_compartment({A: Resp(ns(items=[group]))}),
+                        get_dr_protection_group=lambda gid: ns(members=[1, 2]),
+                        list_dr_plans=lambda gid: Resp(ns(items=plans)),
+                        list_dr_plan_executions=lambda gid: Resp(ns(items=runs)))
+    ctx, run = make_ctx(DisasterRecoveryCollector(), {oci.disaster_recovery.DisasterRecoveryClient: client},
+                        search={"DrProtectionGroup": [search_item("DrProtectionGroup", "pg1", A)]}, compartments=[A])
+    out = {r.id: r for r in DisasterRecoveryCollector().collect(ctx)}
+    g = out["pg1"]
+    assert g.details["role"] == "Standby" and g.details["members"] == 2 and g.details["plans"] == 2
+    assert g.details["last_run"].startswith("start drill failed") and g.problem == "warning"  # latest run failed
+    assert g.refs["peer_id"] == "pg0"
+    assert out["sw"].details["last_run"] == "Never run" and out["sw"].problem is None
+    assert out["drill"].state == "NEEDS_REFRESH" and out["drill"].problem == "warning"
+    assert out["drill"].refs["dr_protection_group_id"] == "pg1"
+    assert run.errors() == []
+
+
+def test_waf_apm_streams_and_mysql_channels(make_ctx):
+    from ocimon.collectors.database import MysqlChannelCollector
+    from ocimon.collectors.security import ApmCollector, WafCollector
+    from ocimon.collectors.streaming import StreamingCollector
+    clients = {
+        oci.waf.WafClient: FakeClient(list_web_app_firewalls=by_compartment({A: Resp(ns(items=[ns(
+            id="waf1", display_name="public-waf", compartment_id=A, lifecycle_state="ACTIVE", time_created=NOW,
+            backend_type="LOAD_BALANCER", load_balancer_id="lb1", web_app_firewall_policy_id="pol1",
+            lifecycle_details=None)]))})),
+        oci.apm_control_plane.ApmDomainClient: FakeClient(list_apm_domains=by_compartment({A: [ns(
+            id="apm1", display_name="DCIQ", compartment_id=A, lifecycle_state="ACTIVE", time_created=NOW,
+            is_free_tier=True, description=None)]})),
+        oci.streaming.StreamAdminClient: FakeClient(list_streams=by_compartment({A: [ns(
+            id="st1", name="events", compartment_id=A, lifecycle_state="ACTIVE", time_created=NOW, partitions=3,
+            messages_endpoint="https://cell-1.streaming", stream_pool_id="pool1")]})),
+        oci.mysql.ChannelsClient: FakeClient(list_channels=by_compartment({A: [ns(
+            id="ch1", display_name="replica-feed", compartment_id=A, lifecycle_state="NEEDS_ATTENTION",
+            time_created=NOW, is_enabled=True, lifecycle_details="not receiving transactions (MY-13114)",
+            source=ns(hostname="mysql-0.example", port=3306), target=ns(db_system_id="db1"))]})),
+    }
+    search = {t: [search_item(t, "x", A)] for t in ("WebAppFirewall", "ApmDomain", "Stream", "MysqlChannel")}
+
+    ctx, _ = make_ctx(WafCollector(), clients, search=search, compartments=[A])
+    (w,) = WafCollector().collect(ctx)
+    assert w.refs["load_balancer_id"] == "lb1" and w.details["backend"] == "Load balancer"
+
+    ctx, _ = make_ctx(ApmCollector(), clients, search=search, compartments=[A])
+    assert ApmCollector().collect(ctx)[0].details["free_tier"] is True
+
+    ctx, _ = make_ctx(StreamingCollector(), clients, search=search, compartments=[A])
+    (st,) = StreamingCollector().collect(ctx)
+    assert st.name == "events" and st.details["partitions"] == 3
+
+    ctx, _ = make_ctx(MysqlChannelCollector(), clients, search=search, compartments=[A])
+    (ch,) = MysqlChannelCollector().collect(ctx)
+    assert ch.problem == "warning" and ch.details["source"] == "mysql-0.example:3306"
+    assert "MY-13114" in ch.details["lifecycle_details"] and ch.refs["db_system_id"] == "db1"

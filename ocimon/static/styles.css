@@ -397,3 +397,5 @@ ul.reasons { margin: 0 0 8px; padding-left: 18px; color: var(--warn); font-weigh
 #pause-icon { stroke-width: 2.4; }
 #pause-btn.paused #pause-icon { fill: currentColor; stroke-width: 1.5; }
 .paused-note { color: var(--warn) !important; font-weight: 600; }
+
+td.issue { min-width: 260px; max-width: 420px; color: var(--warn); }

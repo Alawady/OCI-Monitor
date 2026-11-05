@@ -9,10 +9,13 @@ from . import (  # noqa: F401  (imported for @register side effects)
     block_storage,
     compute,
     database,
+    disaster_recovery,
     functions,
     load_balancer,
     network,
     object_storage,
+    security,
+    streaming,
     oke,
 )
 from .base import REGISTRY, Collector
