@@ -171,6 +171,12 @@ def build_demo(tick: int = 0) -> Snapshot:
     b.add("mysqldbsystem", "mysql_db_system", "orders-mysql", JED, prod_data, "ACTIVE", details={
         "version": "8.4.3", "shape": "MySQL.8", "highly_available": True,
         "heatwave": "2 x HeatWave.512GB (ACTIVE)", "endpoint": "10.10.4.12:3306", "availability_domain": "AD-1"})
+    b.add("postgresqldbsystem", "postgresql_db_system", "observability-pg", JED, prod_data, "ACTIVE", details={
+        "version": "15.15", "shape": "VM.Standard.E5.Flex", "ocpus": 2, "memory_gb": 32, "nodes": 1,
+        "storage": "OCI optimized storage", "lifecycle_details": None})
+    b.add("rediscluster", "cache_cluster", "sessions-cache", JED, prod_app, "ACTIVE", details={
+        "version": "Valkey 7.2", "nodes": 3, "memory_per_node_gb": 16, "mode": "Nonsharded", "shards": None,
+        "endpoint": "10.10.6.20", "lifecycle_details": None})
     b.bucket("prod-backups", JED, prod_data)
     b.bucket("prod-public-assets", JED, prod_data, public=True)
     b.bucket("prod-logs-archive", JED, prod_data)
@@ -234,6 +240,10 @@ def build_demo(tick: int = 0) -> Snapshot:
         if r.type == "instance" and r.state == "RUNNING":
             metric_signals.apply(r, hot.get(r.name, {
                 "cpu_pct": round(b.rng.uniform(3, 65), 1), "memory_pct": round(b.rng.uniform(20, 80), 1), "fs_status": 0}))
+        elif r.type == "postgresql_db_system":
+            metric_signals.apply(r, {"cpu_pct": 17.8, "memory_pct": 41.0, "_storage_used": 1.4, "_storage_total": 816.2})
+        elif r.type == "cache_cluster":
+            metric_signals.apply(r, {"cpu_pct": 2.2, "memory_pct": 23.5})
         elif r.type == "mysql_db_system" and r.state == "ACTIVE":
             metric_signals.apply(r, {"cpu_pct": round(b.rng.uniform(5, 40), 1), "memory_pct": round(b.rng.uniform(40, 75), 1),
                                      "storage_pct": round(b.rng.uniform(10, 60), 1), **hot.get(r.name, {})})

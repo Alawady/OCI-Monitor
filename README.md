@@ -53,7 +53,7 @@ To try the UI without OCI access, use `./run.sh --demo`. It serves a realistic f
 | Compute | Instances | state, shape, OCPUs/memory, AD, fault domain, private/public IPs; **CPU %, memory used %, filesystem health** |
 | Block Storage | Block volumes, boot volumes | state, size, VPUs, attached instance |
 | Load Balancing | Load balancers, network load balancers | state, overall health and per-backend-set health (OK/WARNING/CRITICAL/UNKNOWN) |
-| Databases | DB systems (VM/BM), Autonomous Databases, MySQL HeatWave | state, version, workload type, HeatWave cluster, HA; **storage used %, CPU %, memory %** (MySQL, Autonomous) |
+| Databases | DB systems (VM/BM), Autonomous Databases, MySQL HeatWave, Database with PostgreSQL, OCI Cache (Redis/Valkey) | state, version, shape/size, workload type, HeatWave cluster, HA, nodes; **storage used %, CPU %, memory %** (MySQL, Autonomous, PostgreSQL; CPU/memory for OCI Cache) |
 | Kubernetes | OKE clusters, node pools | state, Kubernetes version, node health (failed nodes → CRITICAL) |
 | Networking | VCNs, subnets, internet/NAT/service gateways, DRGs, LPGs | summary |
 | Object Storage | Buckets | public/private, approx. object count and size, tier |
@@ -113,7 +113,7 @@ Instances and managed databases get a **Health** column from OCI Monitoring metr
 | Signal | Warning | Critical | Source (no setup needed) |
 |---|---|---|---|
 | Memory used | ≥ 90% | ≥ 97% | Oracle Cloud Agent (`oci_computeagent`), MySQL, Autonomous DB |
-| Storage used (databases) | ≥ 80% | ≥ 90% | `oci_mysql_database`, `oci_autonomous_database` |
+| Storage used (databases) | ≥ 80% | ≥ 90% | `oci_mysql_database`, `oci_autonomous_database`, `oci_postgresql` |
 | CPU | ≥ 90% | — | Oracle Cloud Agent, MySQL, Autonomous DB |
 | Filesystem health | — | problem reported | `oci_compute_instance_health` |
 
@@ -188,6 +188,8 @@ Allow group OCIMonitorReaders to read network-load-balancers in tenancy
 Allow group OCIMonitorReaders to read database-family in tenancy
 Allow group OCIMonitorReaders to read autonomous-database-family in tenancy
 Allow group OCIMonitorReaders to read mysql-family in tenancy
+Allow group OCIMonitorReaders to read postgres-db-systems in tenancy
+Allow group OCIMonitorReaders to read redis-family in tenancy
 Allow group OCIMonitorReaders to read cluster-family in tenancy
 Allow group OCIMonitorReaders to read buckets in tenancy
 Allow group OCIMonitorReaders to read functions-family in tenancy

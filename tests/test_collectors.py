@@ -7,7 +7,8 @@ import oci
 from ocimon.collectors.api_gateway import ApiGatewayCollector
 from ocimon.collectors.block_storage import BlockStorageCollector
 from ocimon.collectors.compute import ComputeCollector
-from ocimon.collectors.database import AutonomousDatabaseCollector, DbSystemCollector, MysqlCollector
+from ocimon.collectors.database import (AutonomousDatabaseCollector, CacheCollector, DbSystemCollector,
+                                       MysqlCollector, PostgresqlCollector)
 from ocimon.collectors.functions import FunctionsCollector
 from ocimon.collectors.load_balancer import LoadBalancerCollector, NetworkLoadBalancerCollector
 from ocimon.collectors.network import NetworkCollector
@@ -359,3 +360,26 @@ def test_pagination_follows_next_page(make_ctx):
     ctx, _ = make_ctx(ComputeCollector(), {oci.core.ComputeClient: compute, oci.core.VirtualNetworkClient: FakeClient()},
                       search={"Instance": [search_item("Instance", "i1", A)]}, compartments=[A])
     assert sorted(r.id for r in ComputeCollector().collect(ctx)) == ["i1", "i2"]
+
+
+def test_postgresql_and_cache(make_ctx):
+    pg = FakeClient(list_db_systems=by_compartment({A: Resp(ns(items=[ns(
+        id="pg1", display_name="signoz", compartment_id=A, lifecycle_state="ACTIVE", time_created=NOW,
+        db_version="15.15", shape="VM.Standard.E5.Flex", instance_ocpu_count=2, instance_memory_size_in_gbs=32,
+        instance_count=1, system_type="OCI_OPTIMIZED_STORAGE", lifecycle_details=None)]))}))
+    cache = FakeClient(list_redis_clusters=by_compartment({A: Resp(ns(items=[ns(
+        id="rc1", display_name="sessions", compartment_id=A, lifecycle_state="ACTIVE", time_created=NOW,
+        software_version="REDIS_7_0", node_count=3, node_memory_in_gbs=16.0, cluster_mode="NONSHARDED",
+        shard_count=None, primary_endpoint_ip_address="10.0.0.9", lifecycle_details=None, subnet_id="s1")]))}))
+    search = {"PostgresqlDbSystem": [search_item("PostgresqlDbSystem", "pg1", A)],
+              "RedisCluster": [search_item("RedisCluster", "rc1", A)]}
+    clients = {oci.psql.PostgresqlClient: pg, oci.redis.RedisClusterClient: cache}
+
+    ctx, _ = make_ctx(PostgresqlCollector(), clients, search=search, compartments=[A])
+    (p,) = PostgresqlCollector().collect(ctx)
+    assert p.type == "postgresql_db_system" and p.details["version"] == "15.15" and p.details["ocpus"] == 2
+    assert p.details["storage"] == "OCI optimized storage"
+
+    ctx, _ = make_ctx(CacheCollector(), clients, search=search, compartments=[A])
+    (c,) = CacheCollector().collect(ctx)
+    assert c.details["version"] == "Redis 7.0" and c.details["nodes"] == 3 and c.details["mode"] == "Nonsharded"

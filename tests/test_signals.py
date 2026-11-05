@@ -155,3 +155,10 @@ def test_alarms_only_on_request():
     assert alarms and all(r.type == "alarm" for r in alarms)
     firing = [r for r in alarms if r.state == "FIRING"]
     assert {r.problem for r in firing} == {"critical", "warning"}
+
+
+def test_postgresql_storage_is_derived_from_used_and_total():
+    pg = res("postgresql_db_system", "ACTIVE", rid="ocid1.postgresqldbsystem.oc1.x.pg")
+    metrics.apply(pg, {"cpu_pct": 17.8, "_storage_used": 700.0, "_storage_total": 816.0})
+    assert pg.metrics == {"cpu_pct": 17.8, "storage_pct": 85.8}  # helper values aren't kept
+    assert pg.health == "WARNING" and pg.health_reasons == ["Storage 85.8% (≥ 80%)"]
