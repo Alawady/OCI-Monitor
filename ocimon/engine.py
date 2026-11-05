@@ -234,7 +234,7 @@ class Collection:
                                  None if comp == self.root_id else comp)
                 continue
             for rid, value in found.items():
-                values[rid][spec.key] = round(value, 1)
+                values[rid][spec.key] = value if spec.key.startswith("_") else round(value, 1)
         for r in resources:
             found = values.get(r.id.lower())
             if found:

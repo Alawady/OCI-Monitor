@@ -107,3 +107,79 @@ class MysqlCollector(Collector):
                     },
                 ))
         return out
+
+
+_PG_STORAGE = {"OCI_OPTIMIZED_STORAGE": "OCI optimized storage"}
+
+
+@register
+class PostgresqlCollector(Collector):
+    key = "postgresql"
+    label = "Database with PostgreSQL"
+    types = (
+        ResourceType("postgresql_db_system", "PostgreSQL", "database", "PostgresqlDbSystem",
+                     "postgresql/db-systems/{id}"),
+    )
+
+    def collect(self, ctx: RegionContext) -> list[Resource]:
+        client = lambda: ctx.client(oci.psql.PostgresqlClient)  # noqa: E731
+        listed = ctx.per_compartment("ListPostgresqlDbSystems", ctx.compartments_with("PostgresqlDbSystem"),
+                                     lambda c: list_all(client().list_db_systems, compartment_id=c))
+        return [
+            Resource(
+                id=d.id, name=d.display_name, type="postgresql_db_system", region=ctx.region,
+                compartment_id=d.compartment_id, state=d.lifecycle_state, time_created=d.time_created,
+                details={
+                    "version": d.db_version,
+                    "shape": d.shape,
+                    "ocpus": d.instance_ocpu_count,
+                    "memory_gb": d.instance_memory_size_in_gbs,
+                    "nodes": d.instance_count,
+                    "storage": _PG_STORAGE.get(d.system_type, d.system_type),
+                    # Only worth showing when it explains a non-active state.
+                    "lifecycle_details": (d.lifecycle_details or None) if d.lifecycle_state != "ACTIVE" else None,
+                },
+            )
+            for items in listed.values() for d in items
+        ]
+
+
+def cache_version(value: str | None) -> str | None:
+    """'REDIS_7_0' -> 'Redis 7.0', 'VALKEY_7_2' -> 'Valkey 7.2'."""
+    if not value:
+        return None
+    engine, *parts = value.split("_")
+    return f"{engine.capitalize()} {'.'.join(parts)}".strip()
+
+
+@register
+class CacheCollector(Collector):
+    key = "cache"
+    label = "OCI Cache"
+    types = (
+        ResourceType("cache_cluster", "OCI Cache (Redis/Valkey)", "database", "RedisCluster",
+                     "redis/redis-clusters/{id}"),
+    )
+
+    def collect(self, ctx: RegionContext) -> list[Resource]:
+        client = lambda: ctx.client(oci.redis.RedisClusterClient)  # noqa: E731
+        listed = ctx.per_compartment("ListRedisClusters", ctx.compartments_with("RedisCluster"),
+                                     lambda c: list_all(client().list_redis_clusters, compartment_id=c))
+        out = []
+        for items in listed.values():
+            for c in items:
+                out.append(Resource(
+                    id=c.id, name=c.display_name, type="cache_cluster", region=ctx.region,
+                    compartment_id=c.compartment_id, state=c.lifecycle_state, time_created=c.time_created,
+                    details={
+                        "version": cache_version(c.software_version),
+                        "nodes": c.node_count,
+                        "memory_per_node_gb": c.node_memory_in_gbs,
+                        "mode": (c.cluster_mode or "").capitalize() or None,
+                        "shards": c.shard_count,
+                        "endpoint": c.primary_endpoint_ip_address,
+                        "lifecycle_details": c.lifecycle_details or None,
+                    },
+                    refs={"subnet_id": c.subnet_id},
+                ))
+        return out

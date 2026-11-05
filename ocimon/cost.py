@@ -213,6 +213,8 @@ _DEMO_RATES = {
     "autonomous_database": ((12, 60), "Database"),
     "db_system": ((40, 55), "Database"),
     "mysql_db_system": ((8, 45), "MySQL"),
+    "postgresql_db_system": ((9, 12), "OCI Database Service with PostgreSQL"),
+    "cache_cluster": ((18, 20), "OCI Cache Service"),
     "oke_cluster": ((2.4, 2.4), "Container Engine for Kubernetes"),
     "bucket": ((0.1, 6), "Object Storage"),
     "functions_application": ((0.05, 0.6), "Functions"),

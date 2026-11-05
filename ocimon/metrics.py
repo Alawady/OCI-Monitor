@@ -55,6 +55,17 @@ SPECS: list[MetricSpec] = [
                frozenset({"autonomous_database"}), DB_UP),
     MetricSpec("cpu_pct", "oci_autonomous_database", "CpuUtilization[5m].mean()",
                frozenset({"autonomous_database"}), DB_UP),
+    MetricSpec("cpu_pct", "oci_postgresql", "CpuUtilization[5m].mean()", frozenset({"postgresql_db_system"}), DB_UP),
+    MetricSpec("memory_pct", "oci_postgresql", "MemoryUtilization[5m].mean()",
+               frozenset({"postgresql_db_system"}), DB_UP),
+    # PostgreSQL reports used and total storage (GB); storage_pct is derived from the two.
+    MetricSpec("_storage_used", "oci_postgresql", "DataUsedStorage[5m].max()",
+               frozenset({"postgresql_db_system"}), DB_UP),
+    MetricSpec("_storage_total", "oci_postgresql", "DataTotalStorage[5m].max()",
+               frozenset({"postgresql_db_system"}), DB_UP),
+    # OCI Cache reports per node; the busiest node is what matters.
+    MetricSpec("cpu_pct", "oci_redis", "CpuUtilization[5m].mean()", frozenset({"cache_cluster"}), DB_UP),
+    MetricSpec("memory_pct", "oci_redis", "MemoryUtilization[5m].mean()", frozenset({"cache_cluster"}), DB_UP),
 ]
 
 THRESHOLDS: dict[str, Threshold] = {
@@ -90,9 +101,18 @@ def evaluate(metrics: dict[str, float]) -> tuple[str | None, list[str]]:
     return level, reasons
 
 
+def derive(metrics: dict[str, float]) -> dict[str, float]:
+    """Turn raw helper values (keys starting with "_") into reported ones."""
+    out = {k: v for k, v in metrics.items() if not k.startswith("_")}
+    used, total = metrics.get("_storage_used"), metrics.get("_storage_total")
+    if used is not None and total:
+        out["storage_pct"] = round(used / total * 100, 1)
+    return out
+
+
 def apply(resource: Resource, metrics: dict[str, float]) -> None:
     """Attach metric values and fold their health into the resource's own."""
-    resource.metrics.update(metrics)
+    resource.metrics.update(derive(metrics))
     level, reasons = evaluate(resource.metrics)
     resource.health_reasons = reasons
     if level is None:
