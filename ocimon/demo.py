@@ -230,6 +230,32 @@ def build_demo(tick: int = 0) -> Snapshot:
                net="10.30.5", public=True)
     b.bucket("sandbox-tmp", PHX, sandbox, objects=12)
 
+    # Replication, disaster recovery, WAF, APM and streaming.
+    replica = next(r for r in b.resources if r.name == "orders-mysql-replica")
+    b.add("mysqlchannel", "mysql_channel", "orders-replication", RUH, prod_data, "NEEDS_ATTENTION", details={
+        "source": "orders-mysql.prod.internal:3306", "enabled": True,
+        "lifecycle_details": "The Channel is not receiving transactions due to errors (MY-13114)"},
+        refs={"db_system_id": replica.id})
+    primary_pg = b.add("drprotectiongroup", "dr_protection_group", "prod-dr", JED, prod, "ACTIVE", details={
+        "role": "Primary", "peer_region": RUH, "members": 6, "plans": 0, "last_run": "start drill succeeded (2026-10-12)",
+        "sub_state": None, "lifecycle_details": None})
+    standby_pg = b.add("drprotectiongroup", "dr_protection_group", "prod-dr-standby", RUH, prod, "ACTIVE", details={
+        "role": "Standby", "peer_region": JED, "members": None, "plans": 2, "last_run": "start drill succeeded (2026-10-12)",
+        "sub_state": None, "lifecycle_details": None}, refs={"peer_id": primary_pg.id})
+    primary_pg.refs["peer_id"] = standby_pg.id
+    b.add("drplan", "dr_plan", "prod-switchover", RUH, prod, "NEEDS_REFRESH", details={
+        "plan_type": "Switchover", "peer_region": JED, "last_run": "Never run", "lifecycle_details": None},
+        refs={"dr_protection_group_id": standby_pg.id})
+    b.add("drplan", "dr_plan", "prod-start-drill", RUH, prod, "ACTIVE", details={
+        "plan_type": "Start drill", "peer_region": JED, "last_run": "start drill succeeded (2026-10-12)",
+        "lifecycle_details": None}, refs={"dr_protection_group_id": standby_pg.id})
+    public_lb = next(r for r in b.resources if r.name == "prod-public-lb")
+    b.add("webappfirewall", "web_app_firewall", "prod-public-waf", JED, prod_app, "ACTIVE",
+          details={"backend": "Load balancer", "lifecycle_details": None}, refs={"load_balancer_id": public_lb.id})
+    b.add("apmdomain", "apm_domain", "prod-apm", JED, prod, "ACTIVE", details={"free_tier": False, "description": None})
+    b.add("stream", "stream", "orders-events", JED, prod_app, "ACTIVE",
+          details={"partitions": 3, "endpoint": "https://cell-1.streaming.me-jeddah-1.oci.oraclecloud.com"})
+
     # A bucket we could see in Search but not read in detail.
     b.add("bucket", "bucket", "security-audit-logs", JED, security, "ACTIVE", source="search",
           details={"note": "Details unavailable; listed from Resource Search"})

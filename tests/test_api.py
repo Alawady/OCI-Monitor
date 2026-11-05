@@ -27,7 +27,7 @@ def client():
 
 def test_summary(client):
     d = client.get("/api/summary").json()
-    assert d["totals"]["problems"] == 7
+    assert d["totals"]["problems"] == 9
     assert {c["label"] for c in d["cards"]} >= {"Instances", "Databases", "Load Balancers", "Volumes", "OKE"}
     assert d["last_refresh"]
 
@@ -45,7 +45,8 @@ def test_resources_filters(client):
     d = client.get("/api/resources", params={"region": "us-phoenix-1", "state": "RUNNING"}).json()
     assert d["count"] and all(i["region"] == "us-phoenix-1" and i["state"] == "RUNNING" for i in d["items"])
     d = client.get("/api/resources", params={"q": "orders-mysql"}).json()
-    assert {i["name"] for i in d["items"]} == {"orders-mysql", "orders-mysql-replica"}
+    # The replication channel matches too: its source host is orders-mysql.prod.internal
+    assert {i["name"] for i in d["items"]} == {"orders-mysql", "orders-mysql-replica", "orders-replication"}
 
 
 def test_resources_related_resolved(client):
@@ -57,7 +58,7 @@ def test_resources_related_resolved(client):
 def test_compartments_tree(client):
     d = client.get("/api/compartments").json()
     tree = d["tree"]
-    assert tree["id"] == d["root_id"] and tree["total_problems"] == 7
+    assert tree["id"] == d["root_id"] and tree["total_problems"] == 9
     names = {c["name"] for c in tree["children"]}
     assert {"Production", "Staging", "Development", "SharedServices", "Security"} <= names
     # Counts follow the region filter

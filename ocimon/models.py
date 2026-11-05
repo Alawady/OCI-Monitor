@@ -21,7 +21,9 @@ CATEGORIES: list[Category] = [
     Category("load_balancing", "Load Balancing", "Load Balancers"),
     Category("database", "Databases", "Databases"),
     Category("containers", "Kubernetes (OKE)", "OKE"),
-    Category("serverless", "Functions & API Gateway", "Serverless"),
+    Category("serverless", "Functions, API Gateway & Streaming", "Integration"),
+    Category("dr", "Disaster Recovery", "DR"),
+    Category("security", "Security & APM", "Security & APM"),
     Category("object_storage", "Object Storage", "Buckets"),
     Category("networking", "Networking", "Networking"),
 ]
@@ -55,12 +57,12 @@ WARN_STATES = {
     "RESTORING", "SCALING", "TERMINATING", "DELETING", "MOVING", "UPGRADING",
     "MAINTENANCE_IN_PROGRESS", "BACKUP_IN_PROGRESS", "ROLE_CHANGE_IN_PROGRESS",
     "AVAILABLE_NEEDS_ATTENTION", "NEEDS_ATTENTION", "UNAVAILABLE", "INACCESSIBLE",
-    "DEGRADED", "PENDING", "RESTARTING", "STANDBY", "FIRING",
+    "DEGRADED", "PENDING", "RESTARTING", "STANDBY", "FIRING", "NEEDS_REFRESH", "NEEDS_VERIFICATION",
 }
 # Amber states that should still count as a problem, not just "in progress".
 ATTENTION_STATES = {
     "WARNING", "AVAILABLE_NEEDS_ATTENTION", "NEEDS_ATTENTION", "UNAVAILABLE",
-    "INACCESSIBLE", "DEGRADED",
+    "INACCESSIBLE", "DEGRADED", "NEEDS_REFRESH", "NEEDS_VERIFICATION",
 }
 # Resources that are gone on purpose: shown red, but never counted as problems.
 GONE_STATES = {"TERMINATED", "DELETED"}

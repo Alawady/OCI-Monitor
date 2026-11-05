@@ -53,11 +53,13 @@ To try the UI without OCI access, use `./run.sh --demo`. It serves a realistic f
 | Compute | Instances | state, shape, OCPUs/memory, AD, fault domain, private/public IPs; **CPU %, memory used %, filesystem health** |
 | Block Storage | Block volumes, boot volumes | state, size, VPUs, attached instance |
 | Load Balancing | Load balancers, network load balancers | state, overall health and per-backend-set health (OK/WARNING/CRITICAL/UNKNOWN) |
-| Databases | DB systems (VM/BM), Autonomous Databases, MySQL HeatWave, Database with PostgreSQL, OCI Cache (Redis/Valkey) | state, version, shape/size, workload type, HeatWave cluster, HA, nodes; **storage used %, CPU %, memory %** (MySQL, Autonomous, PostgreSQL; CPU/memory for OCI Cache) |
+| Databases | DB systems (VM/BM), Autonomous Databases, MySQL HeatWave (and replication channels), Database with PostgreSQL, OCI Cache (Redis/Valkey) | state, version, shape/size, workload type, HeatWave cluster, HA, nodes; **storage used %, CPU %, memory %** (MySQL, Autonomous, PostgreSQL; CPU/memory for OCI Cache) |
 | Kubernetes | OKE clusters, node pools | state, Kubernetes version, node health (failed nodes → CRITICAL) |
 | Networking | VCNs, subnets, internet/NAT/service gateways, DRGs, LPGs | summary |
 | Object Storage | Buckets | public/private, approx. object count and size, tier |
-| Serverless | Functions applications, API Gateways | state, function count, endpoint |
+| Integration | Functions applications, API Gateways, Streaming | state, function count, endpoint, partitions |
+| Disaster Recovery | Full Stack DR protection groups and DR plans | state, role (primary/standby), peer region, members, plans, last run (drill/switchover/failover); a failed last run or a plan needing refresh is a problem |
+| Security & APM | Web Application Firewalls, APM domains | state, which load balancer each firewall protects, free tier |
 
 The UI has these parts:
 
@@ -190,6 +192,10 @@ Allow group OCIMonitorReaders to read autonomous-database-family in tenancy
 Allow group OCIMonitorReaders to read mysql-family in tenancy
 Allow group OCIMonitorReaders to read postgres-db-systems in tenancy
 Allow group OCIMonitorReaders to read redis-family in tenancy
+Allow group OCIMonitorReaders to read disaster-recovery-family in tenancy
+Allow group OCIMonitorReaders to read waf-family in tenancy
+Allow group OCIMonitorReaders to read apm-domains in tenancy
+Allow group OCIMonitorReaders to read streams in tenancy
 Allow group OCIMonitorReaders to read cluster-family in tenancy
 Allow group OCIMonitorReaders to read buckets in tenancy
 Allow group OCIMonitorReaders to read functions-family in tenancy
